@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Статистика задач</title>
+</head>
+<body>
+    <h1>Статистика задач</h1>
+    <ul>
+    {% for stat in stats %}
+        <li>{{ stat.status }}: {{ stat.count }}</li>
+    {% empty %}
+        <li>Нет данных</li>
+    {% endfor %}
+    </ul>
+    <a href="/admin/">Админка</a>
+</body>
+</html>
