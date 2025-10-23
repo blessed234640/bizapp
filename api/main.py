@@ -13,8 +13,8 @@ async def get_db():
         user='user', 
         password='password', 
         database='bizapp', 
-        host='localhost',  # Используем localhost т.к. запускаем снаружи Docker
-        port='5433'        # Порт который мы настроили
+        host='db',  # Используем localhost т.к. запускаем снаружи Docker, испоьзуем db после добавления в докер 
+        port='5432'        # Порт который мы настроили, настраиваем на 5432 после добавления в докер
     )
     try:
         yield conn
@@ -24,7 +24,7 @@ async def get_db():
 # Функция для подключения к Redis (синхронная)
 def get_redis():
     redis = redis_lib.Redis(
-        host='localhost',
+        host='redis', # ← Имя сервиса в Docker
         port=6379,
         db=0,
         decode_responses=True,  # Автоматически декодирует в строки

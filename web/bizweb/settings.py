@@ -68,8 +68,8 @@ DATABASES = {
         'NAME': 'bizapp',
         'USER': 'user',
         'PASSWORD': 'password',
-        'HOST': 'localhost',  # Имя сервиса в Docker
-        'PORT': '5433',
+        'HOST': 'db',  # Имя сервиса в Docker
+        'PORT': '5432',
     }
 }
 
@@ -117,6 +117,6 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.redis.RedisCache',
-        'LOCATION': 'redis://redis:6379/1',
+        'LOCATION': 'redis://redis:6379/1', # ← Имя сервиса в Docker
     }
 }
