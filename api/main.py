@@ -1,8 +1,8 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from pydantic import BaseModel
+import redis as redis_lib
 import asyncpg
 import json
-from datetime import datetime
 from typing import Optional, List
 
 app = FastAPI(title="Business App API", version="1.0.0")
@@ -20,6 +20,33 @@ async def get_db():
         yield conn
     finally:
         await conn.close()
+
+# Функция для подключения к Redis (синхронная)
+def get_redis():
+    redis = redis_lib.Redis(
+        host='localhost',
+        port=6379,
+        db=0,
+        decode_responses=True,  # Автоматически декодирует в строки
+        encoding='utf-8'
+    )
+    try:
+        yield redis
+    finally:
+        redis.close()
+
+# Разбор функции get_redis:
+
+# aioredis.from_url() - создает подключение к Redis по URL
+
+# encoding="utf-8" - кодировка для русских символов
+
+# decode_responses=True - автоматически декодирует из bytes в строки
+
+# yield redis - возвращает клиент Redis для использования
+
+# finally - гарантирует закрытие соединения
+
 
 # Модели Pydantic для валидации
 class UserCreate(BaseModel):
@@ -49,8 +76,8 @@ class TaskResponse(BaseModel):
     status: str
     priority: int
     metadata: Optional[dict]
-    created_at: datetime
-    updated_at: datetime
+    created_at: str  
+    updated_at: str  
 
 # CRUD для пользователей
 @app.post("/users/", response_model=dict)
@@ -89,7 +116,16 @@ async def get_projects(owner_id: Optional[int] = None, conn: asyncpg.Connection 
     else:
         query = "SELECT * FROM projects"
         rows = await conn.fetch(query)
-    return [dict(row) for row in rows]
+    
+    # Преобразуем datetime в строки
+    result = []
+    for row in rows:
+        row_dict = dict(row)
+        if 'created_at' in row_dict and row_dict['created_at']:
+            row_dict['created_at'] = row_dict['created_at'].isoformat()
+        result.append(row_dict)
+    
+    return result
 
 # CRUD для задач
 @app.post("/tasks/", response_model=dict)
@@ -113,14 +149,48 @@ async def create_task(task: TaskCreate, conn: asyncpg.Connection = Depends(get_d
         raise HTTPException(status_code=400, detail="Project not found")
 
 @app.get("/tasks/", response_model=List[dict])
-async def get_tasks(project_id: Optional[int] = None, conn: asyncpg.Connection = Depends(get_db)):
+async def get_tasks(
+    project_id: Optional[int] = Query(None, description="Фильтр по ID проекта"),
+    conn: asyncpg.Connection = Depends(get_db),
+    redis: redis_lib.Redis = Depends(get_redis)
+):
+    # Формируем ключ для кэша
+    if project_id:
+        cache_key = f"tasks:project:{project_id}"
+    else:
+        cache_key = "tasks:all"
+    
+    # Пытаемся получить данные из кэша (синхронно)
+    cached_data = redis.get(cache_key)
+    if cached_data:
+        print(f"✅ Данные получены из кэша: {cache_key}")
+        return json.loads(cached_data)
+    
+    # Если в кэше нет, запрашиваем из БД
+    print(f"🔍 Данные не найдены в кэше, запрашиваем из БД: {cache_key}")
     if project_id:
         query = "SELECT * FROM tasks WHERE project_id = $1"
         rows = await conn.fetch(query, project_id)
     else:
         query = "SELECT * FROM tasks"
         rows = await conn.fetch(query)
-    return [dict(row) for row in rows]
+    
+    # Преобразуем строки с datetime в JSON-совместимый формат
+    result = []
+    for row in rows:
+        row_dict = dict(row)
+        # Преобразуем datetime объекты в строки ISO format
+        if 'created_at' in row_dict and row_dict['created_at']:
+            row_dict['created_at'] = row_dict['created_at'].isoformat()
+        if 'updated_at' in row_dict and row_dict['updated_at']:
+            row_dict['updated_at'] = row_dict['updated_at'].isoformat()
+        result.append(row_dict)
+    
+    # Сохраняем в кэш на 1 час (3600 секунд) - синхронно
+    redis.setex(cache_key, 3600, json.dumps(result))
+    print(f"💾 Данные сохранены в кэш: {cache_key}")
+    
+    return result
 
 @app.get("/tasks/{task_id}", response_model=dict)
 async def get_task(task_id: int, conn: asyncpg.Connection = Depends(get_db)):
@@ -128,17 +198,60 @@ async def get_task(task_id: int, conn: asyncpg.Connection = Depends(get_db)):
     row = await conn.fetchrow(query, task_id)
     if not row:
         raise HTTPException(status_code=404, detail="Task not found")
-    return dict(row)
+    
+    # Преобразуем datetime в строки
+    result = dict(row)
+    if 'created_at' in result and result['created_at']:
+        result['created_at'] = result['created_at'].isoformat()
+    if 'updated_at' in result and result['updated_at']:
+        result['updated_at'] = result['updated_at'].isoformat()
+    
+    return result
 
 # Аналитика и отчеты
-@app.get("/reports/tasks-stats/", response_model=List[dict])
-async def tasks_stats(conn: asyncpg.Connection = Depends(get_db)):
+@app.get("/reports/tasks-stats/", response_model=List[dict], operation_id="get_tasks_stats")
+async def tasks_stats(
+    conn: asyncpg.Connection = Depends(get_db),
+    redis: redis_lib.Redis = Depends(get_redis)
+):
+    cache_key = "reports:tasks_stats"
+    
+    # Проверяем кэш (синхронно)
+    cached_data = redis.get(cache_key)
+    if cached_data:
+        print("✅ Статистика получена из кэша")
+        return json.loads(cached_data)
+    
+    # Запрос к БД
     query = "SELECT status, COUNT(*) as count FROM tasks GROUP BY status"
     rows = await conn.fetch(query)
-    return [dict(row) for row in rows]
+    
+    # Преобразуем строки
+    result = []
+    for row in rows:
+        row_dict = dict(row)
+        result.append(row_dict)
+    
+    # Сохраняем в кэш на 30 минут (1800 секунд) - синхронно
+    redis.setex(cache_key, 1800, json.dumps(result))
+    print("💾 Статистика сохранена в кэш")
+    
+    return result
 
-@app.get("/reports/project-stats/", response_model=List[dict])
-async def project_stats(conn: asyncpg.Connection = Depends(get_db)):
+@app.get("/reports/project-stats/", response_model=List[dict], operation_id="get_project_stats")
+async def project_stats(
+    conn: asyncpg.Connection = Depends(get_db),
+    redis: redis_lib.Redis = Depends(get_redis)
+):
+    cache_key = "reports:project_stats"
+    
+    # Проверяем кэш
+    cached_data = redis.get(cache_key)
+    if cached_data:
+        print("✅ Статистика проектов получена из кэша")
+        return json.loads(cached_data)
+    
+    # Запрос к БД
     query = """
     SELECT p.title, COUNT(t.id) as task_count, 
            COUNT(CASE WHEN t.status = 'completed' THEN 1 END) as completed_count
@@ -147,7 +260,18 @@ async def project_stats(conn: asyncpg.Connection = Depends(get_db)):
     GROUP BY p.id, p.title
     """
     rows = await conn.fetch(query)
-    return [dict(row) for row in rows]
+    
+    # Преобразуем строки
+    result = []
+    for row in rows:
+        row_dict = dict(row)
+        result.append(row_dict)
+    
+    # Сохраняем в кэш на 30 минут
+    redis.setex(cache_key, 1800, json.dumps(result))
+    print("💾 Статистика проектов сохранена в кэш")
+    
+    return result
 
 # Полнотекстовый поиск задач
 @app.get("/search/tasks/", response_model=List[dict])
@@ -158,7 +282,14 @@ async def search_tasks(q: str, conn: asyncpg.Connection = Depends(get_db)):
     WHERE tsv @@ plainto_tsquery('russian', $1)
     """
     rows = await conn.fetch(query, q)
-    return [dict(row) for row in rows]
+    
+    # Преобразуем datetime в строки
+    result = []
+    for row in rows:
+        row_dict = dict(row)
+        result.append(row_dict)
+    
+    return result
 
 # Health check
 @app.get("/")
@@ -166,10 +297,40 @@ async def root():
     return {"message": "Business App API is running", "version": "1.0.0"}
 
 @app.get("/health/")
-async def health_check(conn: asyncpg.Connection = Depends(get_db)):
+async def health_check(
+    conn: asyncpg.Connection = Depends(get_db),
+    redis: redis_lib.Redis = Depends(get_redis)
+):
     try:
         # Проверяем подключение к БД
-        result = await conn.fetchval("SELECT 1")
-        return {"status": "healthy", "database": "connected"}
+        db_result = await conn.fetchval("SELECT 1")
+        # Проверяем подключение к Redis
+        redis_result = redis.ping()
+        return {
+            "status": "healthy", 
+            "database": "connected",
+            "redis": "connected" if redis_result else "disconnected"
+        }
     except Exception as e:
-        return {"status": "unhealthy", "database": "disconnected", "error": str(e)}
+        return {"status": "unhealthy", "error": str(e)}
+    
+# Эндпоинты для управления кэшем
+@app.delete("/cache/clear/")
+async def clear_cache(redis: redis_lib.Redis = Depends(get_redis)):
+    """Очистка всего кэша"""
+    redis.flushdb()
+    return {"message": "Кэш полностью очищен"}
+
+@app.delete("/cache/tasks/")
+async def clear_tasks_cache(redis: redis_lib.Redis = Depends(get_redis)):
+    """Очистка кэша задач"""
+    keys = redis.keys("tasks:*")
+    if keys:
+        redis.delete(*keys)
+    return {"message": f"Кэш задач очищен, удалено ключей: {len(keys)}"}
+
+@app.get("/cache/keys/")
+async def get_cache_keys(redis: redis_lib.Redis = Depends(get_redis)):
+    """Просмотр всех ключей в кэше"""
+    keys = redis.keys("*")
+    return {"keys": keys}
