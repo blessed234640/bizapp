@@ -4,8 +4,69 @@ import redis as redis_lib
 import asyncpg
 import json
 from typing import Optional, List
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials  # ДОБАВЬ ЭТОТ ИМПОРТ
 
-app = FastAPI(title="Business App API", version="1.0.0")
+security = HTTPBearer()
+
+# ИМПОРТЫ ДЛЯ JWT АУТЕНТИФИКАЦИИ
+from models import (
+    UserCreate, UserLogin, UserResponse, Token, TokenRefresh
+)
+from auth_utils import (
+    verify_password, 
+    get_password_hash, 
+    create_access_token, 
+    create_refresh_token,
+    verify_refresh_token,
+    verify_access_token
+)
+
+# ЗАВИСИМОСТИ ДЛЯ АУТЕНТИФИКАЦИИ И АВТОРИЗАЦИИ
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    payload = verify_access_token(token)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Невалидный токен"
+        )
+    return payload
+
+async def admin_only(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Требуются права администратора"
+        )
+    return current_user
+
+async def admin_or_manager(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") not in ["admin", "manager"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Требуются права администратора или менеджера"
+        )
+    return current_user
+
+async def any_worker(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") not in ["admin", "manager", "user"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Требуются права работника"
+        )
+    return current_user
+
+async def any_authenticated(current_user: dict = Depends(get_current_user)):
+    return current_user
+
+# СОЗДАЕМ ПРИЛОЖЕНИЕ FASTAPI
+app = FastAPI(
+    title="Business App API", 
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
 
 # Функция для подключения к БД
 async def get_db():
@@ -13,21 +74,21 @@ async def get_db():
         user='user', 
         password='password', 
         database='bizapp', 
-        host='db',  # Используем localhost т.к. запускаем снаружи Docker, испоьзуем db после добавления в докер 
-        port='5432'        # Порт который мы настроили, настраиваем на 5432 после добавления в докер
+        host='db',
+        port='5432'
     )
     try:
         yield conn
     finally:
         await conn.close()
 
-# Функция для подключения к Redis (синхронная)
+# Функция для подключения к Redis
 def get_redis():
     redis = redis_lib.Redis(
-        host='redis', # ← Имя сервиса в Docker
+        host='redis',
         port=6379,
         db=0,
-        decode_responses=True,  # Автоматически декодирует в строки
+        decode_responses=True,
         encoding='utf-8'
     )
     try:
@@ -35,26 +96,7 @@ def get_redis():
     finally:
         redis.close()
 
-# Разбор функции get_redis:
-
-# aioredis.from_url() - создает подключение к Redis по URL
-
-# encoding="utf-8" - кодировка для русских символов
-
-# decode_responses=True - автоматически декодирует из bytes в строки
-
-# yield redis - возвращает клиент Redis для использования
-
-# finally - гарантирует закрытие соединения
-
-
-# Модели Pydantic для валидации
-class UserCreate(BaseModel):
-    username: str
-    email: str
-    password_hash: str
-    role: str = 'user'
-
+# МОДЕЛИ ДЛЯ CRUD ОПЕРАЦИЙ
 class ProjectCreate(BaseModel):
     title: str
     description: Optional[str] = None
@@ -79,28 +121,195 @@ class TaskResponse(BaseModel):
     created_at: str  
     updated_at: str  
 
-# CRUD для пользователей
-@app.post("/users/", response_model=dict)
-async def create_user(user: UserCreate, conn: asyncpg.Connection = Depends(get_db)):
-    query = """
-    INSERT INTO users (username, email, password_hash, role)
-    VALUES ($1, $2, $3, $4) RETURNING id
+# 🔐 JWT АУТЕНТИФИКАЦИЯ
+@app.post("/auth/register", response_model=UserResponse, status_code=201)
+async def register(user_data: UserCreate, conn: asyncpg.Connection = Depends(get_db)):
+    """
+    РЕГИСТРАЦИЯ НОВОГО ПОЛЬЗОВАТЕЛЯ
+    """
+    # Проверяем уникальность username и email
+    existing_user = await conn.fetchrow(
+        "SELECT id FROM users WHERE username = $1 OR email = $2",
+        user_data.username, user_data.email
+    )
+    
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="Пользователь с таким username или email уже существует"
+        )
+    
+    # Хешируем пароль
+    hashed_password = get_password_hash(user_data.password)
+    
+    try:
+        # Сохраняем пользователя с ролью 'guest'
+        user_id = await conn.fetchval("""
+            INSERT INTO users (username, email, password_hash, role, is_active)
+            VALUES ($1, $2, $3, 'guest', TRUE) 
+            RETURNING id
+        """, user_data.username, user_data.email, hashed_password)
+        
+        # Возвращаем данные пользователя
+        new_user = await conn.fetchrow("""
+            SELECT id, username, email, role, is_active, created_at
+            FROM users WHERE id = $1
+        """, user_id)
+        
+        return dict(new_user)
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ошибка при создании пользователя: {str(e)}"
+        )
+
+@app.post("/auth/login", response_model=Token)
+async def login(user_data: UserLogin, conn: asyncpg.Connection = Depends(get_db)):
+    """
+    АВТОРИЗАЦИЯ ПОЛЬЗОВАТЕЛЯ И ВЫДАЧА JWT ТОКЕНОВ
+    """
+    # Ищем пользователя в базе данных
+    user = await conn.fetchrow("""
+        SELECT id, username, password_hash, role, is_active 
+        FROM users WHERE username = $1
+    """, user_data.username)
+    
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Неверный username или password",
+        )
+    
+    # Проверяем пароль
+    if not verify_password(user_data.password, user["password_hash"]):
+        raise HTTPException(
+            status_code=401,
+            detail="Неверный username или password",
+        )
+    
+    # Проверяем что пользователь активен
+    if not user["is_active"]:
+        raise HTTPException(
+            status_code=403,
+            detail="Ваш аккаунт деактивирован. Обратитесь к администратору."
+        )
+    
+    # Генерируем JWT токены
+    user_payload = {
+        "user_id": user["id"], 
+        "username": user["username"],
+        "role": user["role"]
+    }
+    
+    access_token = create_access_token(data=user_payload)
+    refresh_token = create_refresh_token(data=user_payload)
+    
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer"
+    }
+
+@app.post("/auth/refresh", response_model=Token)
+async def refresh_token_endpoint(
+    token_data: TokenRefresh, 
+    conn: asyncpg.Connection = Depends(get_db)
+):
+    """
+    ОБНОВЛЕНИЕ ACCESS TOKEN С ПОМОЩЬЮ REFRESH TOKEN
     """
     try:
-        user_id = await conn.fetchval(query, user.username, user.email, user.password_hash, user.role)
-        return {"id": user_id, "message": "User created successfully"}
-    except asyncpg.UniqueViolationError:
-        raise HTTPException(status_code=400, detail="Username or email already exists")
+        # Проверяем refresh token
+        payload = verify_refresh_token(token_data.refresh_token)
+        user_id = payload.get("user_id")
+        username = payload.get("username")
+        
+        if not user_id or not username:
+            raise HTTPException(
+                status_code=401,
+                detail="Невалидные данные в refresh token"
+            )
+        
+        # Проверяем что пользователь существует и активен
+        user = await conn.fetchrow("""
+            SELECT id, username, role, is_active 
+            FROM users WHERE id = $1
+        """, user_id)
+        
+        if user is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Пользователь не найден"
+            )
+        
+        if not user["is_active"]:
+            raise HTTPException(
+                status_code=403,
+                detail="Ваш аккаунт деактивирован"
+            )
+        
+        # Генерируем новую пару токенов
+        user_payload = {
+            "user_id": user["id"],
+            "username": user["username"], 
+            "role": user["role"]
+        }
+        
+        new_access_token = create_access_token(data=user_payload)
+        new_refresh_token = create_refresh_token(data=user_payload)
+        
+        return {
+            "access_token": new_access_token,
+            "refresh_token": new_refresh_token,
+            "token_type": "bearer"
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=401,
+            detail=f"Невалидный refresh token: {str(e)}"
+        )
 
-@app.get("/users/", response_model=List[dict])
-async def get_users(conn: asyncpg.Connection = Depends(get_db)):
-    query = "SELECT id, username, email, role FROM users"
-    rows = await conn.fetch(query)
-    return [dict(row) for row in rows]
+@app.get("/auth/me", response_model=UserResponse)
+async def get_current_user_profile(
+    current_user: dict = Depends(get_current_user),
+    conn: asyncpg.Connection = Depends(get_db)
+):
+    """
+    ПОЛУЧЕНИЕ ДАННЫХ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ
+    """
+    # Получаем полные данные пользователя из базы данных
+    user_id = current_user.get("user_id")
+    
+    user = await conn.fetchrow("""
+        SELECT id, username, email, role, is_active, created_at
+        FROM users WHERE id = $1
+    """, user_id)
+    
+    if not user:
+        raise HTTPException(
+            status_code=404,
+            detail="Пользователь не найден"
+        )
+    
+    # Преобразуем datetime в строку
+    user_dict = dict(user)
+    if 'created_at' in user_dict and user_dict['created_at']:
+        user_dict['created_at'] = user_dict['created_at'].isoformat()
+    
+    return user_dict
 
-# CRUD для проектов
+# 📊 CRUD ДЛЯ ПРОЕКТОВ
 @app.post("/projects/", response_model=dict)
-async def create_project(project: ProjectCreate, conn: asyncpg.Connection = Depends(get_db)):
+async def create_project(
+    project: ProjectCreate, 
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_worker)
+):
+    """
+    СОЗДАНИЕ ПРОЕКТА
+    """
     query = """
     INSERT INTO projects (title, description, owner_id)
     VALUES ($1, $2, $3) RETURNING id
@@ -109,7 +318,14 @@ async def create_project(project: ProjectCreate, conn: asyncpg.Connection = Depe
     return {"id": project_id, "message": "Project created successfully"}
 
 @app.get("/projects/", response_model=List[dict])
-async def get_projects(owner_id: Optional[int] = None, conn: asyncpg.Connection = Depends(get_db)):
+async def get_projects(
+    owner_id: Optional[int] = None, 
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_authenticated)
+):
+    """
+    ПОЛУЧЕНИЕ ПРОЕКТОВ
+    """
     if owner_id:
         query = "SELECT * FROM projects WHERE owner_id = $1"
         rows = await conn.fetch(query, owner_id)
@@ -127,12 +343,19 @@ async def get_projects(owner_id: Optional[int] = None, conn: asyncpg.Connection 
     
     return result
 
-# CRUD для задач
+# ✅ CRUD ДЛЯ ЗАДАЧ
 @app.post("/tasks/", response_model=dict)
-async def create_task(task: TaskCreate, conn: asyncpg.Connection = Depends(get_db)):
+async def create_task(
+    task: TaskCreate, 
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_worker)
+):
+    """
+    СОЗДАНИЕ ЗАДАЧИ
+    """
     query = """
-    INSERT INTO tasks (project_id, title, description, status, priority, metadata)
-    VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+    INSERT INTO tasks (project_id, title, description, status, priority, metadata, assigned_to)
+    VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id
     """
     try:
         task_id = await conn.fetchval(
@@ -142,7 +365,8 @@ async def create_task(task: TaskCreate, conn: asyncpg.Connection = Depends(get_d
             task.description, 
             task.status, 
             task.priority, 
-            json.dumps(task.metadata) if task.metadata else None
+            json.dumps(task.metadata) if task.metadata else None,
+            current_user["id"]  # Назначаем текущему пользователю
         )
         return {"id": task_id, "message": "Task created successfully"}
     except asyncpg.ForeignKeyViolationError:
@@ -152,22 +376,24 @@ async def create_task(task: TaskCreate, conn: asyncpg.Connection = Depends(get_d
 async def get_tasks(
     project_id: Optional[int] = Query(None, description="Фильтр по ID проекта"),
     conn: asyncpg.Connection = Depends(get_db),
-    redis: redis_lib.Redis = Depends(get_redis)
+    redis: redis_lib.Redis = Depends(get_redis),
+    current_user: dict = Depends(any_authenticated)
 ):
+    """
+    ПОЛУЧЕНИЕ ЗАДАЧ
+    """
     # Формируем ключ для кэша
     if project_id:
         cache_key = f"tasks:project:{project_id}"
     else:
         cache_key = "tasks:all"
     
-    # Пытаемся получить данные из кэша (синхронно)
+    # Пытаемся получить данные из кэша
     cached_data = redis.get(cache_key)
     if cached_data:
-        print(f"✅ Данные получены из кэша: {cache_key}")
         return json.loads(cached_data)
     
     # Если в кэше нет, запрашиваем из БД
-    print(f"🔍 Данные не найдены в кэше, запрашиваем из БД: {cache_key}")
     if project_id:
         query = "SELECT * FROM tasks WHERE project_id = $1"
         rows = await conn.fetch(query, project_id)
@@ -175,31 +401,32 @@ async def get_tasks(
         query = "SELECT * FROM tasks"
         rows = await conn.fetch(query)
     
-    # Преобразуем строки с datetime в JSON-совместимый формат
+    # Преобразуем datetime в строки
     result = []
     for row in rows:
         row_dict = dict(row)
-        # Преобразуем datetime объекты в строки ISO format
         if 'created_at' in row_dict and row_dict['created_at']:
             row_dict['created_at'] = row_dict['created_at'].isoformat()
         if 'updated_at' in row_dict and row_dict['updated_at']:
             row_dict['updated_at'] = row_dict['updated_at'].isoformat()
         result.append(row_dict)
     
-    # Сохраняем в кэш на 1 час (3600 секунд) - синхронно
+    # Сохраняем в кэш на 1 час
     redis.setex(cache_key, 3600, json.dumps(result))
-    print(f"💾 Данные сохранены в кэш: {cache_key}")
     
     return result
 
 @app.get("/tasks/{task_id}", response_model=dict)
-async def get_task(task_id: int, conn: asyncpg.Connection = Depends(get_db)):
+async def get_task(
+    task_id: int, 
+    conn: asyncpg.Connection = Depends(get_db), 
+    current_user: dict = Depends(any_authenticated)
+):
     query = "SELECT * FROM tasks WHERE id = $1"
     row = await conn.fetchrow(query, task_id)
     if not row:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    # Преобразуем datetime в строки
     result = dict(row)
     if 'created_at' in result and result['created_at']:
         result['created_at'] = result['created_at'].isoformat()
@@ -208,90 +435,46 @@ async def get_task(task_id: int, conn: asyncpg.Connection = Depends(get_db)):
     
     return result
 
-# Аналитика и отчеты
-@app.get("/reports/tasks-stats/", response_model=List[dict], operation_id="get_tasks_stats")
+# 📈 АНАЛИТИКА И ОТЧЕТЫ
+@app.get("/reports/tasks-stats/", response_model=List[dict])
 async def tasks_stats(
     conn: asyncpg.Connection = Depends(get_db),
-    redis: redis_lib.Redis = Depends(get_redis)
+    redis: redis_lib.Redis = Depends(get_redis),
+    current_user: dict = Depends(any_worker)
 ):
+    """
+    СТАТИСТИКА ЗАДАЧ
+    """
     cache_key = "reports:tasks_stats"
     
-    # Проверяем кэш (синхронно)
     cached_data = redis.get(cache_key)
     if cached_data:
-        print("✅ Статистика получена из кэша")
         return json.loads(cached_data)
     
-    # Запрос к БД
     query = "SELECT status, COUNT(*) as count FROM tasks GROUP BY status"
     rows = await conn.fetch(query)
     
-    # Преобразуем строки
-    result = []
-    for row in rows:
-        row_dict = dict(row)
-        result.append(row_dict)
-    
-    # Сохраняем в кэш на 30 минут (1800 секунд) - синхронно
+    result = [dict(row) for row in rows]
     redis.setex(cache_key, 1800, json.dumps(result))
-    print("💾 Статистика сохранена в кэш")
     
     return result
 
-@app.get("/reports/project-stats/", response_model=List[dict], operation_id="get_project_stats")
-async def project_stats(
-    conn: asyncpg.Connection = Depends(get_db),
-    redis: redis_lib.Redis = Depends(get_redis)
-):
-    cache_key = "reports:project_stats"
-    
-    # Проверяем кэш
-    cached_data = redis.get(cache_key)
-    if cached_data:
-        print("✅ Статистика проектов получена из кэша")
-        return json.loads(cached_data)
-    
-    # Запрос к БД
-    query = """
-    SELECT p.title, COUNT(t.id) as task_count, 
-           COUNT(CASE WHEN t.status = 'completed' THEN 1 END) as completed_count
-    FROM projects p
-    LEFT JOIN tasks t ON p.id = t.project_id
-    GROUP BY p.id, p.title
-    """
-    rows = await conn.fetch(query)
-    
-    # Преобразуем строки
-    result = []
-    for row in rows:
-        row_dict = dict(row)
-        result.append(row_dict)
-    
-    # Сохраняем в кэш на 30 минут
-    redis.setex(cache_key, 1800, json.dumps(result))
-    print("💾 Статистика проектов сохранена в кэш")
-    
-    return result
-
-# Полнотекстовый поиск задач
+# 🔍 ПОИСК
 @app.get("/search/tasks/", response_model=List[dict])
-async def search_tasks(q: str, conn: asyncpg.Connection = Depends(get_db)):
+async def search_tasks(
+    q: str, 
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_authenticated)
+):
     query = """
     SELECT id, title, description, ts_headline('russian', description, plainto_tsquery('russian', $1)) as highlight
     FROM tasks 
     WHERE tsv @@ plainto_tsquery('russian', $1)
     """
     rows = await conn.fetch(query, q)
-    
-    # Преобразуем datetime в строки
-    result = []
-    for row in rows:
-        row_dict = dict(row)
-        result.append(row_dict)
-    
-    return result
+    return [dict(row) for row in rows]
 
-# Health check
+# 🏥 HEALTH CHECKS
 @app.get("/")
 async def root():
     return {"message": "Business App API is running", "version": "1.0.0"}
@@ -302,9 +485,7 @@ async def health_check(
     redis: redis_lib.Redis = Depends(get_redis)
 ):
     try:
-        # Проверяем подключение к БД
         db_result = await conn.fetchval("SELECT 1")
-        # Проверяем подключение к Redis
         redis_result = redis.ping()
         return {
             "status": "healthy", 
@@ -313,24 +494,24 @@ async def health_check(
         }
     except Exception as e:
         return {"status": "unhealthy", "error": str(e)}
-    
-# Эндпоинты для управления кэшем
+
+# 🗄️ УПРАВЛЕНИЕ КЭШЕМ
 @app.delete("/cache/clear/")
-async def clear_cache(redis: redis_lib.Redis = Depends(get_redis)):
+async def clear_cache(
+    redis: redis_lib.Redis = Depends(get_redis), 
+    current_user: dict = Depends(admin_only)
+):
     """Очистка всего кэша"""
     redis.flushdb()
     return {"message": "Кэш полностью очищен"}
 
 @app.delete("/cache/tasks/")
-async def clear_tasks_cache(redis: redis_lib.Redis = Depends(get_redis)):
+async def clear_tasks_cache(
+    redis: redis_lib.Redis = Depends(get_redis), 
+    current_user: dict = Depends(admin_or_manager)
+):
     """Очистка кэша задач"""
     keys = redis.keys("tasks:*")
     if keys:
         redis.delete(*keys)
     return {"message": f"Кэш задач очищен, удалено ключей: {len(keys)}"}
-
-@app.get("/cache/keys/")
-async def get_cache_keys(redis: redis_lib.Redis = Depends(get_redis)):
-    """Просмотр всех ключей в кэше"""
-    keys = redis.keys("*")
-    return {"keys": keys}

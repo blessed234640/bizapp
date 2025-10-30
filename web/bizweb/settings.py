@@ -26,7 +26,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'core',
+    'core.apps.CoreConfig',
 ]
 
 MIDDLEWARE = [
@@ -119,4 +119,32 @@ CACHES = {
         'BACKEND': 'django.core.cache.backends.redis.RedisCache',
         'LOCATION': 'redis://redis:6379/1', # ← Имя сервиса в Docker
     }
+}
+AUTH_USER_MODEL = 'core.User'
+
+# Права доступа для ролей
+ROLE_PERMISSIONS = {
+    'guest': [
+        'core.view_own_profile',
+    ],
+    'user': [
+        'core.view_own_profile',
+        'core.add_project',
+        'core.change_own_project',
+        'core.view_own_project',
+        'core.add_task',
+        'core.change_own_task',
+    ],
+    'manager': [
+        'core.view_own_profile',
+        'core.add_project',
+        'core.change_project',
+        'core.view_all_projects',
+        'core.manage_tasks',
+        'core.view_users',
+        'core.manage_role_requests',
+    ],
+    'admin': [
+        'core.*',
+    ]
 }
