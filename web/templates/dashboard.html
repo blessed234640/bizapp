@@ -1,17 +1,161 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Статистика задач</title>
+    <title>Business App Dashboard</title>
+    <!-- Bootstrap 5 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .stat-card { transition: transform 0.2s; }
+        .stat-card:hover { transform: translateY(-5px); }
+    </style>
 </head>
-<body>
-    <h1>Статистика задач</h1>
-    <ul>
-    {% for stat in stats %}
-        <li>{{ stat.status }}: {{ stat.count }}</li>
-    {% empty %}
-        <li>Нет данных</li>
-    {% endfor %}
-    </ul>
-    <a href="/admin/">Админка</a>
+<body class="bg-light">
+    <!-- Навигация -->
+    <nav class="navbar navbar-dark bg-dark">
+        <div class="container-fluid">
+            <span class="navbar-brand">
+                <i class="fas fa-chart-line"></i> Business Dashboard
+            </span>
+            <div>
+                <a href="/admin/" class="btn btn-outline-light btn-sm">
+                    <i class="fas fa-cog"></i> Админка
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container-fluid mt-4">
+        <div class="row">
+            <!-- Карточка проектов -->
+            <div class="col-md-3">
+                <div class="card stat-card bg-primary text-white mb-3">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between">
+                            <div>
+                                <h4 id="total-projects">0</h4>
+                                <p>Проектов</p>
+                            </div>
+                            <i class="fas fa-folder fa-2x"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Карточка задач -->
+            <div class="col-md-3">
+                <div class="card stat-card bg-success text-white mb-3">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between">
+                            <div>
+                                <h4 id="total-tasks">0</h4>
+                                <p>Задач</p>
+                            </div>
+                            <i class="fas fa-tasks fa-2x"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- График -->
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-chart-pie"></i> Статистика задач</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="tasksChart" width="400" height="200"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Список проектов -->
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between">
+                        <h5><i class="fas fa-list"></i> Проекты</h5>
+                        <button class="btn btn-primary btn-sm" onclick="loadProjects()">
+                            <i class="fas fa-sync"></i> Обновить
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div id="projects-list">
+                            <div class="text-center text-muted">
+                                <i class="fas fa-spinner fa-spin"></i> Загрузка...
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // Загрузка статистики задач
+    async function loadStats() {
+        try {
+            const response = await fetch('/api/reports/tasks-stats/');
+            const stats = await response.json();
+            
+            // Обновляем счетчик задач
+            const totalTasks = stats.reduce((sum, item) => sum + item.count, 0);
+            document.getElementById('total-tasks').textContent = totalTasks;
+            
+            // Строим график
+            createChart(stats);
+        } catch (error) {
+            console.error('Ошибка загрузки статистики:', error);
+        }
+    }
+
+    // Загрузка проектов
+    async function loadProjects() {
+        try {
+            const response = await fetch('/api/projects/');
+            const projects = await response.json();
+            
+            const projectsList = document.getElementById('projects-list');
+            projectsList.innerHTML = projects.map(project => `
+                <div class="card mb-2">
+                    <div class="card-body">
+                        <h6 class="card-title">${project.title}</h6>
+                        <p class="card-text text-muted">${project.description || 'Нет описания'}</p>
+                        <small class="text-muted">
+                            Создан: ${new Date(project.created_at).toLocaleDateString()}
+                        </small>
+                    </div>
+                </div>
+            `).join('');
+        } catch (error) {
+            console.error('Ошибка загрузки проектов:', error);
+        }
+    }
+
+    // Создание графика
+    function createChart(stats) {
+        const ctx = document.getElementById('tasksChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'pie',
+            data: {
+                labels: stats.map(item => item.status),
+                datasets: [{
+                    data: stats.map(item => item.count),
+                    backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0']
+                }]
+            }
+        });
+    }
+
+    // Загружаем данные при старте
+    document.addEventListener('DOMContentLoaded', function() {
+        loadStats();
+        loadProjects();
+    });
+    </script>
 </body>
 </html>

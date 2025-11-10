@@ -133,7 +133,8 @@ class Task(models.Model):
         on_delete=models.SET_NULL, 
         null=True, 
         blank=True,
-        related_name='assigned_tasks'
+        related_name='assigned_tasks',
+        db_column='assigned_to'
     )
 
     class Meta:
@@ -156,3 +157,23 @@ class TaskLog(models.Model):
     
     def __str__(self):
         return f"{self.task.title} - {self.action}"
+    
+class ProjectMember(models.Model):
+    ROLE_CHOICES = (
+        ('member', 'Участник'),
+        ('manager', 'Менеджер'),
+        ('admin', 'Администратор'),
+    )
+    
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='project_memberships')
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='members')
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='member')
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed = False  # ДОБАВЬТЕ ЭТУ СТРОКУ!
+        db_table = 'project_members'
+        unique_together = ['user', 'project']
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.project.title} ({self.role})"

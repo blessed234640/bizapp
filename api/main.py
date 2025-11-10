@@ -6,6 +6,23 @@ import json
 from typing import Optional, List
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials  # ДОБАВЬ ЭТОТ ИМПОРТ
+from fastapi.middleware.cors import CORSMiddleware
+
+# СОЗДАЕМ ПРИЛОЖЕНИЕ FASTAPI
+app = FastAPI(
+    title="Business App API", 
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8000", "http://localhost:8080", "http://web:8080"],  # Django адреса
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 security = HTTPBearer()
 
@@ -60,14 +77,6 @@ async def any_worker(current_user: dict = Depends(get_current_user)):
 async def any_authenticated(current_user: dict = Depends(get_current_user)):
     return current_user
 
-# СОЗДАЕМ ПРИЛОЖЕНИЕ FASTAPI
-app = FastAPI(
-    title="Business App API", 
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
-)
-
 # Функция для подключения к БД
 async def get_db():
     conn = await asyncpg.connect(
@@ -100,7 +109,6 @@ def get_redis():
 class ProjectCreate(BaseModel):
     title: str
     description: Optional[str] = None
-    owner_id: int
 
 class TaskCreate(BaseModel):
     project_id: int
@@ -108,6 +116,7 @@ class TaskCreate(BaseModel):
     description: Optional[str] = None
     status: str = 'pending'
     priority: int = 0
+    assignee_id: Optional[int] = None  # Исполнитель (может быть None)
     metadata: Optional[dict] = None
 
 class TaskResponse(BaseModel):
@@ -119,7 +128,101 @@ class TaskResponse(BaseModel):
     priority: int
     metadata: Optional[dict]
     created_at: str  
-    updated_at: str  
+    updated_at: str
+
+class ProjectMemberAdd(BaseModel):
+    user_id: int
+    role: str = "member"
+
+class ProjectMemberResponse(BaseModel):
+    id: int
+    username: str
+    email: str
+    role: str
+    joined_at: str
+
+# УПРАВЛЕНИЕ УЧАСТНИКАМИ ПРОЕКТА
+@app.post("/projects/{project_id}/members/", response_model=dict)
+async def add_project_member(
+    project_id: int,
+    member_data: ProjectMemberAdd,
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_worker)
+):
+    """
+    ДОБАВЛЕНИЕ УЧАСТНИКА В ПРОЕКТ
+    """
+    # Проверяем что текущий пользователь - владелец проекта или менеджер
+    project = await conn.fetchrow("SELECT owner_id FROM projects WHERE id = $1", project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Только владелец или админ может добавлять участников
+    if project["owner_id"] != current_user["user_id"] and current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Only project owner or admin can add members")
+    
+    # Проверяем что пользователь существует
+    user = await conn.fetchrow("SELECT id FROM users WHERE id = $1", member_data.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Добавляем участника
+    try:
+        await conn.execute("""
+            INSERT INTO project_members (project_id, user_id, role) 
+            VALUES ($1, $2, $3)
+        """, project_id, member_data.user_id, member_data.role)
+        
+        return {"message": "Member added successfully"}
+    
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(status_code=400, detail="User is already a project member")
+
+@app.get("/projects/{project_id}/members/", response_model=List[dict])
+async def get_project_members(
+    project_id: int,
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_authenticated)
+):
+    """
+    ПОЛУЧЕНИЕ УЧАСТНИКОВ ПРОЕКТА
+    """
+    # Проверяем доступ к проекту
+    has_access = await check_project_access(conn, project_id, current_user["user_id"])
+    if not has_access:
+        raise HTTPException(status_code=403, detail="No access to this project")
+    
+    members = await conn.fetch("""
+        SELECT u.id, u.username, u.email, pm.role, pm.joined_at
+        FROM project_members pm
+        JOIN users u ON pm.user_id = u.id
+        WHERE pm.project_id = $1
+        ORDER BY pm.role DESC, u.username
+    """, project_id)
+    
+    result = []
+    for member in members:
+        member_dict = dict(member)
+        if 'joined_at' in member_dict and member_dict['joined_at']:
+            member_dict['joined_at'] = member_dict['joined_at'].isoformat()
+        result.append(member_dict)
+    
+    return result
+
+# Функция проверки доступа к проекту
+async def check_project_access(conn, project_id, user_id):
+    """Проверяет имеет ли пользователь доступ к проекту"""
+    # Админы и менеджеры видят все проекты
+    user = await conn.fetchrow("SELECT role FROM users WHERE id = $1", user_id)
+    if user and user["role"] in ["admin", "manager"]:
+        return True
+    
+    # Проверяем является ли пользователь участником проекта
+    member = await conn.fetchrow(
+        "SELECT id FROM project_members WHERE project_id = $1 AND user_id = $2",
+        project_id, user_id
+    )
+    return member is not None
 
 # 🔐 JWT АУТЕНТИФИКАЦИЯ
 @app.post("/auth/register", response_model=UserResponse, status_code=201)
@@ -308,30 +411,50 @@ async def create_project(
     current_user: dict = Depends(any_worker)
 ):
     """
-    СОЗДАНИЕ ПРОЕКТА
+    СОЗДАНИЕ ПРОЕКТА (АВТОМАТИЧЕСКИ ДОБАВЛЯЕТ ВЛАДЕЛЬЦА КАК УЧАСТНИКА)
     """
     query = """
     INSERT INTO projects (title, description, owner_id)
     VALUES ($1, $2, $3) RETURNING id
     """
-    project_id = await conn.fetchval(query, project.title, project.description, project.owner_id)
+    
+    project_id = await conn.fetchval(
+        query, 
+        project.title, 
+        project.description, 
+        current_user["user_id"]
+    )
+    
+    # Автоматически добавляем владельца как участника с ролью 'owner'
+    await conn.execute("""
+        INSERT INTO project_members (project_id, user_id, role)
+        VALUES ($1, $2, 'owner')
+    """, project_id, current_user["user_id"])
+    
     return {"id": project_id, "message": "Project created successfully"}
 
 @app.get("/projects/", response_model=List[dict])
 async def get_projects(
-    owner_id: Optional[int] = None, 
     conn: asyncpg.Connection = Depends(get_db),
     current_user: dict = Depends(any_authenticated)
 ):
     """
-    ПОЛУЧЕНИЕ ПРОЕКТОВ
+    ПОЛУЧЕНИЕ ПРОЕКТОВ (ТОЛЬКО ТЕХ, К КОТОРЫМ ЕСТЬ ДОСТУП)
     """
-    if owner_id:
-        query = "SELECT * FROM projects WHERE owner_id = $1"
-        rows = await conn.fetch(query, owner_id)
-    else:
-        query = "SELECT * FROM projects"
+    if current_user["role"] in ["admin", "manager"]:
+        # Админы и менеджеры видят все проекты
+        query = "SELECT * FROM projects ORDER BY created_at DESC"
         rows = await conn.fetch(query)
+    else:
+        # Обычные пользователи видят только свои проекты
+        query = """
+        SELECT p.* FROM projects p
+        LEFT JOIN project_members pm ON p.id = pm.project_id
+        WHERE p.owner_id = $1 OR pm.user_id = $1
+        GROUP BY p.id
+        ORDER BY p.created_at DESC
+        """
+        rows = await conn.fetch(query, current_user["user_id"])
     
     # Преобразуем datetime в строки
     result = []
@@ -343,7 +466,6 @@ async def get_projects(
     
     return result
 
-# ✅ CRUD ДЛЯ ЗАДАЧ
 @app.post("/tasks/", response_model=dict)
 async def create_task(
     task: TaskCreate, 
@@ -351,12 +473,30 @@ async def create_task(
     current_user: dict = Depends(any_worker)
 ):
     """
-    СОЗДАНИЕ ЗАДАЧИ
+    СОЗДАНИЕ ЗАДАЧИ (ТОЛЬКО ДЛЯ УЧАСТНИКОВ ПРОЕКТА)
     """
+    # Проверяем доступ к проекту
+    has_access = await check_project_access(conn, task.project_id, current_user["user_id"])
+    if not has_access:
+        raise HTTPException(status_code=403, detail="No access to this project")
+    
+    # Если указан assignee_id, проверяем что он участник проекта
+    if task.assignee_id:
+        is_member = await conn.fetchrow(
+            "SELECT id FROM project_members WHERE project_id = $1 AND user_id = $2",
+            task.project_id, task.assignee_id
+        )
+        if not is_member:
+            raise HTTPException(status_code=400, detail="Assignee must be a project member")
+    
+    # Если assignee_id не указан, назначаем на текущего пользователя
+    assignee_id = task.assignee_id or current_user["user_id"]
+    
     query = """
     INSERT INTO tasks (project_id, title, description, status, priority, metadata, assigned_to)
     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id
     """
+    
     try:
         task_id = await conn.fetchval(
             query, 
@@ -366,9 +506,17 @@ async def create_task(
             task.status, 
             task.priority, 
             json.dumps(task.metadata) if task.metadata else None,
-            current_user["id"]  # Назначаем текущему пользователю
+            assignee_id
         )
+        
+        # Создаем запись в логе
+        await conn.execute("""
+            INSERT INTO task_logs (task_id, user_id, action, details)
+            VALUES ($1, $2, 'created', $3)
+        """, task_id, current_user["user_id"], json.dumps({"title": task.title}))
+        
         return {"id": task_id, "message": "Task created successfully"}
+    
     except asyncpg.ForeignKeyViolationError:
         raise HTTPException(status_code=400, detail="Project not found")
 
@@ -380,26 +528,35 @@ async def get_tasks(
     current_user: dict = Depends(any_authenticated)
 ):
     """
-    ПОЛУЧЕНИЕ ЗАДАЧ
+    ПОЛУЧЕНИЕ ЗАДАЧ (ТОЛЬКО ИЗ ПРОЕКТОВ, К КОТОРЫМ ЕСТЬ ДОСТУП)
     """
-    # Формируем ключ для кэша
-    if project_id:
-        cache_key = f"tasks:project:{project_id}"
+    if current_user["role"] in ["admin", "manager"]:
+        # Админы и менеджеры видят все задачи
+        if project_id:
+            query = "SELECT * FROM tasks WHERE project_id = $1"
+            rows = await conn.fetch(query, project_id)
+        else:
+            query = "SELECT * FROM tasks"
+            rows = await conn.fetch(query)
     else:
-        cache_key = "tasks:all"
-    
-    # Пытаемся получить данные из кэша
-    cached_data = redis.get(cache_key)
-    if cached_data:
-        return json.loads(cached_data)
-    
-    # Если в кэше нет, запрашиваем из БД
-    if project_id:
-        query = "SELECT * FROM tasks WHERE project_id = $1"
-        rows = await conn.fetch(query, project_id)
-    else:
-        query = "SELECT * FROM tasks"
-        rows = await conn.fetch(query)
+        # Обычные пользователи видят только задачи из своих проектов
+        if project_id:
+            # Проверяем доступ к конкретному проекту
+            has_access = await check_project_access(conn, project_id, current_user["user_id"])
+            if not has_access:
+                raise HTTPException(status_code=403, detail="No access to this project")
+            
+            query = "SELECT * FROM tasks WHERE project_id = $1"
+            rows = await conn.fetch(query, project_id)
+        else:
+            query = """
+            SELECT t.* FROM tasks t
+            JOIN projects p ON t.project_id = p.id
+            LEFT JOIN project_members pm ON p.id = pm.project_id
+            WHERE p.owner_id = $1 OR pm.user_id = $1
+            GROUP BY t.id
+            """
+            rows = await conn.fetch(query, current_user["user_id"])
     
     # Преобразуем datetime в строки
     result = []
@@ -411,9 +568,6 @@ async def get_tasks(
             row_dict['updated_at'] = row_dict['updated_at'].isoformat()
         result.append(row_dict)
     
-    # Сохраняем в кэш на 1 час
-    redis.setex(cache_key, 3600, json.dumps(result))
-    
     return result
 
 @app.get("/tasks/{task_id}", response_model=dict)
@@ -422,12 +576,17 @@ async def get_task(
     conn: asyncpg.Connection = Depends(get_db), 
     current_user: dict = Depends(any_authenticated)
 ):
-    query = "SELECT * FROM tasks WHERE id = $1"
-    row = await conn.fetchrow(query, task_id)
-    if not row:
+    # Получаем задачу
+    task = await conn.fetchrow("SELECT * FROM tasks WHERE id = $1", task_id)
+    if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    result = dict(row)
+    # Проверяем доступ к проекту задачи
+    has_access = await check_project_access(conn, task["project_id"], current_user["user_id"])
+    if not has_access:
+        raise HTTPException(status_code=403, detail="No access to this task")
+    
+    result = dict(task)
     if 'created_at' in result and result['created_at']:
         result['created_at'] = result['created_at'].isoformat()
     if 'updated_at' in result and result['updated_at']:
@@ -473,6 +632,81 @@ async def search_tasks(
     """
     rows = await conn.fetch(query, q)
     return [dict(row) for row in rows]
+
+# ЗАДАЧИ ПОЛЬЗОВАТЕЛЯ
+@app.get("/my-tasks/", response_model=List[dict])
+async def get_my_tasks(
+    status: Optional[str] = Query(None, description="Фильтр по статусу"),
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_authenticated)
+):
+    """
+    ПОЛУЧЕНИЕ ЗАДАЧ, НАЗНАЧЕННЫХ НА ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ
+    """
+    if status:
+        query = """
+        SELECT t.*, p.title as project_title 
+        FROM tasks t
+        JOIN projects p ON t.project_id = p.id
+        WHERE t.assigned_to = $1 AND t.status = $2
+        ORDER BY t.priority DESC, t.created_at DESC
+        """
+        rows = await conn.fetch(query, current_user["user_id"], status)
+    else:
+        query = """
+        SELECT t.*, p.title as project_title 
+        FROM tasks t
+        JOIN projects p ON t.project_id = p.id
+        WHERE t.assigned_to = $1
+        ORDER BY t.priority DESC, t.created_at DESC
+        """
+        rows = await conn.fetch(query, current_user["user_id"])
+    
+    result = []
+    for row in rows:
+        row_dict = dict(row)
+        if 'created_at' in row_dict and row_dict['created_at']:
+            row_dict['created_at'] = row_dict['created_at'].isoformat()
+        if 'updated_at' in row_dict and row_dict['updated_at']:
+            row_dict['updated_at'] = row_dict['updated_at'].isoformat()
+        result.append(row_dict)
+    
+    return result
+
+# УДАЛЕНИЕ УЧАСТНИКА ИЗ ПРОЕКТА
+@app.delete("/projects/{project_id}/members/{user_id}")
+async def remove_project_member(
+    project_id: int,
+    user_id: int,
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_worker)
+):
+    """
+    УДАЛЕНИЕ УЧАСТНИКА ИЗ ПРОЕКТА
+    """
+    # Проверяем что текущий пользователь - владелец проекта
+    project = await conn.fetchrow("SELECT owner_id FROM projects WHERE id = $1", project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Только владелец может удалять участников (кроме себя)
+    if project["owner_id"] != current_user["user_id"]:
+        raise HTTPException(status_code=403, detail="Only project owner can remove members")
+    
+    # Нельзя удалить владельца
+    if user_id == project["owner_id"]:
+        raise HTTPException(status_code=400, detail="Cannot remove project owner")
+    
+    # Удаляем участника
+    result = await conn.execute(
+        "DELETE FROM project_members WHERE project_id = $1 AND user_id = $2",
+        project_id, user_id
+    )
+    
+    if result == "DELETE 0":
+        raise HTTPException(status_code=404, detail="Member not found in project")
+    
+    return {"message": "Member removed successfully"}
 
 # 🏥 HEALTH CHECKS
 @app.get("/")

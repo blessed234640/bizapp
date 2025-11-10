@@ -1,109 +1,138 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from django.utils.html import format_html
-from .models import User, Project, Task, TaskLog, RoleUpgradeRequest
+from .models import User, Project, Task, TaskLog, RoleUpgradeRequest, ProjectMember
 
-@admin.register(User)
+# Админка для пользователей с 4 ролями
 class CustomUserAdmin(UserAdmin):
-    list_display = ('username', 'email', 'role', 'is_staff', 'date_joined')
-    list_filter = ('role', 'is_staff', 'is_superuser', 'date_joined')
-    search_fields = ('username', 'email')
-    ordering = ('-date_joined',)
-    
+    list_display = ['username', 'email', 'role', 'is_active', 'date_joined']
+    list_filter = ['role', 'is_active', 'date_joined']
     fieldsets = (
-        (None, {'fields': ('username', 'password_hash')}),
-        ('Personal info', {'fields': ('email',)}),
-        ('Permissions', {'fields': ('role', 'is_active', 'is_staff', 'is_superuser')}),
-        ('Important dates', {'fields': ('last_login', 'date_joined')}),
+        (None, {'fields': ('username', 'password')}),
+        ('Персональная информация', {'fields': ('email', 'first_name', 'last_name')}),
+        ('Права доступа', {
+            'fields': ('role', 'is_active', 'is_staff', 'is_superuser'),
+            'description': 'Роли: гость (только просмотр), пользователь (создание проектов), менеджер (управление проектами), администратор (полный доступ)'
+        }),
+        ('Важные даты', {'fields': ('last_login', 'date_joined')}),
     )
-    
     add_fieldsets = (
         (None, {
             'classes': ('wide',),
-            'fields': ('username', 'email', 'password_hash', 'role', 'is_staff', 'is_superuser'),
+            'fields': ('username', 'email', 'password1', 'password2', 'role', 'is_active'),
         }),
     )
-    
-    def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        # Менеджеры видят только пользователей с ролями guest и user
-        if request.user.role == 'manager' and not request.user.is_superuser:
-            return qs.filter(role__in=['guest', 'user'])
-        return qs
-    
-    def has_change_permission(self, request, obj=None):
-        if obj and request.user.role == 'manager' and not request.user.is_superuser:
-            # Менеджеры могут редактировать только обычных пользователей
-            return obj.role in ['guest', 'user']
-        return super().has_change_permission(request, obj)
+    readonly_fields = ['date_joined']
 
-@admin.register(RoleUpgradeRequest)
-class RoleUpgradeRequestAdmin(admin.ModelAdmin):
-    list_display = ('user', 'current_user_role', 'requested_role', 'status', 'created_at', 'reviewed_by')
-    list_filter = ('status', 'requested_role', 'created_at')
-    readonly_fields = ('created_at',)  # УБРАЛ current_role отсюда
-    search_fields = ('user__username', 'user__email')
-    actions = ['approve_requests', 'reject_requests']
-    
-    def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        if hasattr(request.user, 'role') and request.user.role == 'manager' and not request.user.is_superuser:
-            return qs.filter(requested_role__in=['user', 'manager'])
-        return qs
-    
-    def has_change_permission(self, request, obj=None):
-        if obj and hasattr(request.user, 'role') and request.user.role in ['admin', 'manager']:
-            return True
-        return False
-    
-    def approve_requests(self, request, queryset):
-        for upgrade_request in queryset:
-            if upgrade_request.status == 'pending':
-                user = upgrade_request.user
-                user.role = upgrade_request.requested_role
-                user.save()
-                
-                upgrade_request.status = 'approved'
-                upgrade_request.reviewed_by = request.user
-                upgrade_request.reviewed_at = timezone.now()
-                upgrade_request.save()
-        
-        self.message_user(request, "Выбранные заявки одобрены")
-    approve_requests.short_description = "Одобрить выбранные заявки"
-    
-    def reject_requests(self, request, queryset):
-        queryset.update(
-            status='rejected',
-            reviewed_by=request.user,
-            reviewed_at=timezone.now()
-        )
-        self.message_user(request, "Выбранные заявки отклонены")
-    reject_requests.short_description = "Отклонить выбранные заявки"
+# Админка для участников проектов
+class ProjectMemberInline(admin.TabularInline):
+    model = ProjectMember
+    extra = 1
+    fields = ['user', 'role', 'joined_at']
+    readonly_fields = ['joined_at']
 
-@admin.register(Project)
+# Админка для задач
+class TaskInline(admin.TabularInline):
+    model = Task
+    extra = 0
+    fields = ['title', 'assigned_to', 'status', 'priority']
+    readonly_fields = ['created_at']
+    show_change_link = True
+
+# Админка для проектов
 class ProjectAdmin(admin.ModelAdmin):
-    list_display = ('title', 'owner', 'created_at')
-    list_filter = ('created_at',)
-    search_fields = ('title', 'description')
+    list_display = ['title', 'owner', 'created_at', 'get_member_count', 'get_task_count']
+    list_filter = ['created_at', 'owner']
+    search_fields = ['title', 'description', 'owner__username']
+    inlines = [ProjectMemberInline, TaskInline]
     
-    def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        # Менеджеры и пользователи видят только свои проекты
-        if request.user.role == 'user' and not request.user.is_superuser:
-            return qs.filter(owner=request.user)
-        elif request.user.role == 'manager' and not request.user.is_superuser:
-            # Менеджеры видят все проекты
-            return qs
-        return qs
+    fieldsets = (
+        (None, {
+            'fields': ('title', 'description', 'owner')
+        }),
+        ('Даты', {
+            'fields': ('created_at',),
+            'classes': ('collapse',)
+        }),
+    )
+    readonly_fields = ['created_at']
+    
+    def get_member_count(self, obj):
+        # ИСПРАВЛЕНО: используем related_name 'members' вместо 'projectmember_set'
+        return obj.members.count()
+    get_member_count.short_description = 'Количество Участников'
+    
+    def get_task_count(self, obj):
+        return obj.task_set.count()
+    get_task_count.short_description = 'Задач'
 
-@admin.register(Task)
+# Админка для задач
 class TaskAdmin(admin.ModelAdmin):
-    list_display = ('title', 'project', 'status', 'priority', 'assigned_to', 'created_at')
-    list_filter = ('status', 'priority', 'created_at')
-    search_fields = ('title', 'description')
+    list_display = ['title', 'project', 'assigned_to', 'status', 'priority', 'created_at']
+    list_filter = ['status', 'priority', 'created_at', 'project']
+    search_fields = ['title', 'description', 'project__title', 'assigned_to__username']
+    list_editable = ['status', 'priority']
+    
+    fieldsets = (
+        (None, {
+            'fields': ('title', 'description', 'project', 'assigned_to')
+        }),
+        ('Статус и приоритет', {
+            'fields': ('status', 'priority', 'metadata')
+        }),
+        ('Системные поля', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    readonly_fields = ['created_at', 'updated_at']
 
-@admin.register(TaskLog)
+# Админка для участников проектов
+class ProjectMemberAdmin(admin.ModelAdmin):
+    list_display = ['user', 'project', 'role', 'joined_at']
+    list_filter = ['role', 'joined_at', 'project']
+    search_fields = ['user__username', 'project__title']
+    list_editable = ['role']
+
+# Админка для логов задач
 class TaskLogAdmin(admin.ModelAdmin):
-    list_display = ('task', 'action', 'user', 'timestamp')
-    list_filter = ('action', 'timestamp')
-    readonly_fields = ('timestamp',)
+    list_display = ['task', 'user', 'action', 'timestamp']
+    list_filter = ['action', 'timestamp']
+    search_fields = ['task__title', 'user__username']
+    readonly_fields = ['timestamp']
+    
+    def has_add_permission(self, request):
+        return False
+
+# Админка для запросов на повышение роли
+class RoleUpgradeRequestAdmin(admin.ModelAdmin):
+    list_display = ['user', 'current_user_role', 'requested_role', 'status', 'created_at']
+    list_filter = ['status', 'requested_role', 'current_user_role']
+    list_editable = ['status']
+    search_fields = ['user__username', 'reason']
+    
+    fieldsets = (
+        (None, {
+            'fields': ('user', 'current_user_role', 'requested_role', 'status', 'reason')
+        }),
+        ('Рассмотрение', {
+            'fields': ('reviewed_by', 'reviewed_at'),
+            'classes': ('collapse',)
+        }),
+        ('Дата создания', {
+            'fields': ('created_at',),
+            'classes': ('collapse',)
+        }),
+    )
+    readonly_fields = ['created_at']
+
+# Регистрация всех моделей
+admin.site.register(User, CustomUserAdmin)
+admin.site.register(Project, ProjectAdmin)
+admin.site.register(Task, TaskAdmin)
+admin.site.register(ProjectMember, ProjectMemberAdmin)
+admin.site.register(TaskLog, TaskLogAdmin)
+admin.site.register(RoleUpgradeRequest, RoleUpgradeRequestAdmin)
+
+# Убираем стандартные группы и разрешения если не нужны
+from django.contrib.auth.models import Group, Permission
+admin.site.unregister(Group)
