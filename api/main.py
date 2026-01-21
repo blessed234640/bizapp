@@ -1,3 +1,5 @@
+import os
+from dotenv import load_dotenv
 from fastapi import FastAPI, Depends, HTTPException, Query
 from pydantic import BaseModel
 import redis as redis_lib
@@ -5,8 +7,15 @@ import asyncpg
 import json
 from typing import Optional, List
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials  # ДОБАВЬ ЭТОТ ИМПОРТ
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
+
+# Загружаем переменные окружения
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@db:5432/bizapp")
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://localhost:8080,http://web:8080").split(",")
 
 # СОЗДАЕМ ПРИЛОЖЕНИЕ FASTAPI
 app = FastAPI(
@@ -18,7 +27,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8000", "http://localhost:8080", "http://web:8080"],  # Django адреса
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -28,7 +37,8 @@ security = HTTPBearer()
 
 # ИМПОРТЫ ДЛЯ JWT АУТЕНТИФИКАЦИИ
 from models import (
-    UserCreate, UserLogin, UserResponse, Token, TokenRefresh
+    UserCreate, UserLogin, UserResponse, Token, TokenRefresh,
+    ProfileUpdate, UpgradeRequestCreate
 )
 from auth_utils import (
     verify_password, 
@@ -79,13 +89,7 @@ async def any_authenticated(current_user: dict = Depends(get_current_user)):
 
 # Функция для подключения к БД
 async def get_db():
-    conn = await asyncpg.connect(
-        user='user', 
-        password='password', 
-        database='bizapp', 
-        host='db',
-        port='5432'
-    )
+    conn = await asyncpg.connect(DATABASE_URL)
     try:
         yield conn
     finally:
@@ -93,13 +97,7 @@ async def get_db():
 
 # Функция для подключения к Redis
 def get_redis():
-    redis = redis_lib.Redis(
-        host='redis',
-        port=6379,
-        db=0,
-        decode_responses=True,
-        encoding='utf-8'
-    )
+    redis = redis_lib.from_url(REDIS_URL, decode_responses=True, encoding='utf-8')
     try:
         yield redis
     finally:
@@ -115,8 +113,8 @@ class TaskCreate(BaseModel):
     title: str
     description: Optional[str] = None
     status: str = 'pending'
-    priority: int = 0
-    assignee_id: Optional[int] = None  # Исполнитель (может быть None)
+    priority: Optional[str] = 'low'  # 'low', 'medium', 'high'
+    assignee_id: Optional[int] = None
     metadata: Optional[dict] = None
 
 class TaskResponse(BaseModel):
@@ -159,7 +157,7 @@ async def add_project_member(
     
     # Только владелец или админ может добавлять участников
     if project["owner_id"] != current_user["user_id"] and current_user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="Only project owner or admin can add members")
+        raise HTTPException(status_code=403, detail="Only project owner (Manager) or Admin can add members")
     
     # Проверяем что пользователь существует
     user = await conn.fetchrow("SELECT id FROM users WHERE id = $1", member_data.user_id)
@@ -188,7 +186,7 @@ async def get_project_members(
     ПОЛУЧЕНИЕ УЧАСТНИКОВ ПРОЕКТА
     """
     # Проверяем доступ к проекту
-    has_access = await check_project_access(conn, project_id, current_user["user_id"])
+    has_access = await check_project_access(conn, project_id, current_user)
     if not has_access:
         raise HTTPException(status_code=403, detail="No access to this project")
     
@@ -210,11 +208,38 @@ async def get_project_members(
     return result
 
 # Функция проверки доступа к проекту
-async def check_project_access(conn, project_id, user_id):
+async def check_project_access(conn, project_id, user_base):
     """Проверяет имеет ли пользователь доступ к проекту"""
-    # Админы и менеджеры видят все проекты
-    user = await conn.fetchrow("SELECT role FROM users WHERE id = $1", user_id)
-    if user and user["role"] in ["admin", "manager"]:
+    user_id = user_base["user_id"]
+    user_role = user_base["role"]
+    
+    # Админы видят все проекты
+    if user_role == "admin":
+        return True
+    
+    # Получаем информацию о пользователе и проекте
+    user_info = await conn.fetchrow("SELECT department_id FROM users WHERE id = $1", user_id)
+    project = await conn.fetchrow("SELECT department_id, owner_id FROM projects WHERE id = $1", project_id)
+    
+    if not project:
+        return False
+        
+    # Менеджеры видят проекты своего отдела
+    if user_role == "manager":
+        if user_info and project["department_id"] == user_info["department_id"] and project["department_id"] is not None:
+            return True
+        if project["owner_id"] == user_id:
+            return True
+        # Если проект без отдела, но менеджер его создал - доступ есть (уже проверено выше owner_id)
+        # Если менеджер участник проекта
+        member = await conn.fetchrow("SELECT id FROM project_members WHERE project_id = $1 AND user_id = $2", project_id, user_id)
+        return member is not None
+
+    # Обычные пользователи видят только проекты своего отдела или где они участники
+    if user_info and project["department_id"] == user_info["department_id"] and project["department_id"] is not None:
+        return True
+        
+    if project["owner_id"] == user_id:
         return True
     
     # Проверяем является ли пользователь участником проекта
@@ -248,14 +273,14 @@ async def register(user_data: UserCreate, conn: asyncpg.Connection = Depends(get
     try:
         # Сохраняем пользователя с ролью 'guest'
         user_id = await conn.fetchval("""
-            INSERT INTO users (username, email, password_hash, role, is_active)
-            VALUES ($1, $2, $3, 'guest', TRUE) 
+            INSERT INTO users (username, email, password, role, is_active, is_staff, is_superuser)
+            VALUES ($1, $2, $3, 'guest', TRUE, FALSE, FALSE) 
             RETURNING id
         """, user_data.username, user_data.email, hashed_password)
         
         # Возвращаем данные пользователя
         new_user = await conn.fetchrow("""
-            SELECT id, username, email, role, is_active, created_at
+            SELECT id, username, email, role, is_active, date_joined as created_at
             FROM users WHERE id = $1
         """, user_id)
         
@@ -274,7 +299,7 @@ async def login(user_data: UserLogin, conn: asyncpg.Connection = Depends(get_db)
     """
     # Ищем пользователя в базе данных
     user = await conn.fetchrow("""
-        SELECT id, username, password_hash, role, is_active 
+        SELECT id, username, password as password_hash, role, is_active 
         FROM users WHERE username = $1
     """, user_data.username)
     
@@ -386,8 +411,11 @@ async def get_current_user_profile(
     user_id = current_user.get("user_id")
     
     user = await conn.fetchrow("""
-        SELECT id, username, email, role, is_active, created_at
-        FROM users WHERE id = $1
+        SELECT u.id, u.username, u.email, u.role, u.is_active, u.date_joined as created_at,
+               d.id as department_id, d.name as department_name
+        FROM users u
+        LEFT JOIN departments d ON u.department_id = d.id
+        WHERE u.id = $1
     """, user_id)
     
     if not user:
@@ -403,35 +431,125 @@ async def get_current_user_profile(
     
     return user_dict
 
+@app.put("/auth/profile")
+async def update_profile(
+    profile: ProfileUpdate,
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_authenticated)
+):
+    """ОБНОВЛЕНИЕ ПРОФИЛЯ"""
+    if profile.email is not None:
+        await conn.execute("UPDATE users SET email = $1 WHERE id = $2", profile.email, current_user["user_id"])
+    if profile.avatar_url is not None:
+        await conn.execute("UPDATE users SET avatar_url = $1 WHERE id = $2", profile.avatar_url, current_user["user_id"])
+    return {"message": "Профиль обновлен"}
+
+@app.post("/auth/upgrade-request")
+async def request_upgrade(
+    req: UpgradeRequestCreate,
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_authenticated)
+):
+    """ЗАПРОС НА ПОВЫШЕНИЕ РОЛИ"""
+    await conn.execute("""
+        INSERT INTO role_upgrade_requests (user_id, requested_role, current_user_role, reason)
+        VALUES ($1, $2, $3, $4)
+    """, current_user["user_id"], req.requested_role, current_user["role"], req.reason)
+    return {"message": "Заявка отправлена"}
+
 # 📊 CRUD ДЛЯ ПРОЕКТОВ
 @app.post("/projects/", response_model=dict)
 async def create_project(
     project: ProjectCreate, 
     conn: asyncpg.Connection = Depends(get_db),
-    current_user: dict = Depends(any_worker)
+    current_user: dict = Depends(admin_or_manager)
 ):
     """
     СОЗДАНИЕ ПРОЕКТА (АВТОМАТИЧЕСКИ ДОБАВЛЯЕТ ВЛАДЕЛЬЦА КАК УЧАСТНИКА)
     """
+    # Получаем отдел создателя
+    user_info = await conn.fetchrow("SELECT department_id FROM users WHERE id = $1", current_user["user_id"])
+    dept_id = user_info["department_id"] if user_info else None
+
     query = """
-    INSERT INTO projects (title, description, owner_id)
-    VALUES ($1, $2, $3) RETURNING id
+    INSERT INTO projects (title, description, owner_id, department_id)
+    VALUES ($1, $2, $3, $4) RETURNING id
     """
     
     project_id = await conn.fetchval(
         query, 
         project.title, 
         project.description, 
-        current_user["user_id"]
+        current_user["user_id"],
+        dept_id
     )
     
-    # Автоматически добавляем владельца как участника с ролью 'owner'
+    # Автоматически добавляем владельца как участника
     await conn.execute("""
-        INSERT INTO project_members (project_id, user_id, role)
-        VALUES ($1, $2, 'owner')
+        INSERT INTO project_members (project_id, user_id)
+        VALUES ($1, $2)
     """, project_id, current_user["user_id"])
     
     return {"id": project_id, "message": "Project created successfully"}
+
+class ProjectUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+
+@app.patch("/projects/{id}")
+async def update_project(
+    id: int,
+    proj: ProjectUpdate,
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(admin_or_manager)
+):
+    """ОБНОВЛЕНИЕ ПРОЕКТА"""
+    # Проверяем доступ (только владелец или админ)
+    project = await conn.fetchrow("SELECT owner_id FROM projects WHERE id = $1", id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+        
+    if project["owner_id"] != current_user["user_id"] and current_user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Only owner or admin can edit project")
+
+    if proj.title is not None:
+        await conn.execute("UPDATE projects SET title = $1 WHERE id = $2", proj.title, id)
+    if proj.description is not None:
+        await conn.execute("UPDATE projects SET description = $1 WHERE id = $2", proj.description, id)
+    
+    return {"message": "Project updated"}
+
+@app.put("/projects/{id}/members")
+async def add_project_member(
+    id: int,
+    user_id: int = Query(...),
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(admin_or_manager)
+):
+    """ДОБАВЛЕНИЕ УЧАСТНИКА В ПРОЕКТ"""
+    try:
+        await conn.execute("""
+            INSERT INTO project_members (project_id, user_id)
+            VALUES ($1, $2)
+        """, id, user_id)
+        return {"message": "Участник добавлен"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/projects/{id}/members")
+async def get_project_members(
+    id: int,
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_authenticated)
+):
+    """ПОЛУЧЕНИЕ СПИСКА УЧАСТНИКОВ ПРОЕКТА"""
+    rows = await conn.fetch("""
+        SELECT u.id, u.username, u.role, pm.joined_at
+        FROM project_members pm
+        JOIN users u ON pm.user_id = u.id
+        WHERE pm.project_id = $1
+    """, id)
+    return [dict(r) for r in rows]
 
 @app.get("/projects/", response_model=List[dict])
 async def get_projects(
@@ -443,18 +561,30 @@ async def get_projects(
     """
     if current_user["role"] in ["admin", "manager"]:
         # Админы и менеджеры видят все проекты
-        query = "SELECT * FROM projects ORDER BY created_at DESC"
-        rows = await conn.fetch(query)
-    else:
-        # Обычные пользователи видят только свои проекты
         query = """
-        SELECT p.* FROM projects p
-        LEFT JOIN project_members pm ON p.id = pm.project_id
-        WHERE p.owner_id = $1 OR pm.user_id = $1
-        GROUP BY p.id
+        SELECT p.*, d.name as department_name, u.username as owner_name
+        FROM projects p 
+        LEFT JOIN departments d ON p.department_id = d.id
+        LEFT JOIN users u ON p.owner_id = u.id
         ORDER BY p.created_at DESC
         """
-        rows = await conn.fetch(query, current_user["user_id"])
+        rows = await conn.fetch(query)
+    elif current_user["role"] == "user":
+        # Пользователи видят проекты своего отдела + те, где они участники
+        user_info = await conn.fetchrow("SELECT department_id FROM users WHERE id = $1", current_user["user_id"])
+        query = """
+        SELECT DISTINCT p.*, d.name as department_name, u.username as owner_name
+        FROM projects p
+        LEFT JOIN departments d ON p.department_id = d.id
+        LEFT JOIN users u ON p.owner_id = u.id
+        LEFT JOIN project_members pm ON p.id = pm.project_id
+        WHERE (p.department_id = $1 AND $1 IS NOT NULL) OR p.owner_id = $2 OR pm.user_id = $2
+        ORDER BY p.created_at DESC
+        """
+        rows = await conn.fetch(query, user_info["department_id"] if user_info else None, current_user["user_id"])
+    else:
+        # Гости не видят проектов вообще
+        rows = []
     
     # Преобразуем datetime в строки
     result = []
@@ -470,24 +600,35 @@ async def get_projects(
 async def create_task(
     task: TaskCreate, 
     conn: asyncpg.Connection = Depends(get_db),
-    current_user: dict = Depends(any_worker)
+    current_user: dict = Depends(admin_or_manager)
 ):
     """
     СОЗДАНИЕ ЗАДАЧИ (ТОЛЬКО ДЛЯ УЧАСТНИКОВ ПРОЕКТА)
     """
     # Проверяем доступ к проекту
-    has_access = await check_project_access(conn, task.project_id, current_user["user_id"])
+    has_access = await check_project_access(conn, task.project_id, current_user)
     if not has_access:
         raise HTTPException(status_code=403, detail="No access to this project")
     
-    # Если указан assignee_id, проверяем что он участник проекта
+    # Если указан assignee_id, проверяем что он либо участник проекта, либо в том же отделе
     if task.assignee_id:
         is_member = await conn.fetchrow(
             "SELECT id FROM project_members WHERE project_id = $1 AND user_id = $2",
             task.project_id, task.assignee_id
         )
         if not is_member:
-            raise HTTPException(status_code=400, detail="Assignee must be a project member")
+            # Проверяем, в одном ли они отделе
+            is_in_dept = await conn.fetchrow("""
+                SELECT u.id FROM users u
+                JOIN projects p ON u.department_id = p.department_id
+                WHERE p.id = $1 AND u.id = $2 AND p.department_id IS NOT NULL
+            """, task.project_id, task.assignee_id)
+            
+            if not is_in_dept:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Исполнитель должен быть участником проекта или сотрудником того же отдела"
+                )
     
     # Если assignee_id не указан, назначаем на текущего пользователя
     assignee_id = task.assignee_id or current_user["user_id"]
@@ -497,6 +638,10 @@ async def create_task(
     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id
     """
     
+    # Map string priority to int
+    p_map = {"low": 0, "medium": 1, "high": 2}
+    db_priority = p_map.get(task.priority, 0) if isinstance(task.priority, str) else (task.priority or 0)
+
     try:
         task_id = await conn.fetchval(
             query, 
@@ -504,7 +649,7 @@ async def create_task(
             task.title, 
             task.description, 
             task.status, 
-            task.priority, 
+            db_priority, 
             json.dumps(task.metadata) if task.metadata else None,
             assignee_id
         )
@@ -533,30 +678,56 @@ async def get_tasks(
     if current_user["role"] in ["admin", "manager"]:
         # Админы и менеджеры видят все задачи
         if project_id:
-            query = "SELECT * FROM tasks WHERE project_id = $1"
+            query = """
+            SELECT t.id, t.project_id, t.title, t.description, t.status, t.priority, t.assigned_to, t.metadata, t.created_at, t.updated_at,
+                   u.username as assigned_to_name, p.title as project_title
+            FROM tasks t
+            LEFT JOIN users u ON t.assigned_to = u.id
+            LEFT JOIN projects p ON t.project_id = p.id
+            WHERE t.project_id = $1
+            """
             rows = await conn.fetch(query, project_id)
         else:
-            query = "SELECT * FROM tasks"
+            query = """
+            SELECT t.id, t.project_id, t.title, t.description, t.status, t.priority, t.assigned_to, t.metadata, t.created_at, t.updated_at,
+                   u.username as assigned_to_name, p.title as project_title
+            FROM tasks t
+            LEFT JOIN users u ON t.assigned_to = u.id
+            LEFT JOIN projects p ON t.project_id = p.id
+            ORDER BY t.created_at DESC
+            """
             rows = await conn.fetch(query)
     else:
         # Обычные пользователи видят только задачи из своих проектов
         if project_id:
             # Проверяем доступ к конкретному проекту
-            has_access = await check_project_access(conn, project_id, current_user["user_id"])
+            has_access = await check_project_access(conn, project_id, current_user)
             if not has_access:
                 raise HTTPException(status_code=403, detail="No access to this project")
             
-            query = "SELECT * FROM tasks WHERE project_id = $1"
+            query = """
+            SELECT t.id, t.project_id, t.title, t.description, t.status, t.priority, t.assigned_to, t.metadata, t.created_at, t.updated_at,
+                   u.username as assigned_to_name, p.title as project_title
+            FROM tasks t
+            LEFT JOIN users u ON t.assigned_to = u.id
+            LEFT JOIN projects p ON t.project_id = p.id
+            WHERE t.project_id = $1
+            """
             rows = await conn.fetch(query, project_id)
         else:
+            # Обычные пользователи (user) видят свои задачи + задачи своего отдела
+            user_info = await conn.fetchrow("SELECT department_id FROM users WHERE id = $1", current_user["user_id"])
             query = """
-            SELECT t.* FROM tasks t
+            SELECT DISTINCT t.id, t.project_id, t.title, t.description, t.status, t.priority, t.assigned_to, t.metadata, t.created_at, t.updated_at,
+                            u.username as assigned_to_name, p.title as project_title
+            FROM tasks t
             JOIN projects p ON t.project_id = p.id
+            LEFT JOIN users u ON t.assigned_to = u.id
             LEFT JOIN project_members pm ON p.id = pm.project_id
-            WHERE p.owner_id = $1 OR pm.user_id = $1
-            GROUP BY t.id
+            WHERE t.assigned_to = $1 OR (p.department_id = $2 AND $2 IS NOT NULL) OR pm.user_id = $1
+            ORDER BY t.created_at DESC
             """
-            rows = await conn.fetch(query, current_user["user_id"])
+            rows = await conn.fetch(query, current_user["user_id"], user_info["department_id"] if user_info else None)
     
     # Преобразуем datetime в строки
     result = []
@@ -570,31 +741,83 @@ async def get_tasks(
     
     return result
 
-@app.get("/tasks/{task_id}", response_model=dict)
-async def get_task(
-    task_id: int, 
-    conn: asyncpg.Connection = Depends(get_db), 
+@app.get("/tasks/{id}/logs")
+async def get_task_logs(
+    id: int,
+    conn: asyncpg.Connection = Depends(get_db),
     current_user: dict = Depends(any_authenticated)
 ):
-    # Получаем задачу
-    task = await conn.fetchrow("SELECT * FROM tasks WHERE id = $1", task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
+    """ПОЛУЧЕНИЕ ИСТОРИИ ЗАДАЧИ STANDALONE"""
+    rows = await conn.fetch("""
+        SELECT tl.*, u.username
+        FROM task_logs tl
+        JOIN users u ON tl.user_id = u.id
+        WHERE tl.task_id = $1
+        ORDER BY tl.timestamp DESC
+    """, id)
     
-    # Проверяем доступ к проекту задачи
-    has_access = await check_project_access(conn, task["project_id"], current_user["user_id"])
-    if not has_access:
-        raise HTTPException(status_code=403, detail="No access to this task")
+    log_result = []
+    for r in rows:
+        d = dict(r)
+        if d['timestamp']: d['timestamp'] = d['timestamp'].isoformat()
+        log_result.append(d)
+    return log_result
+
+# 🔍 ПОИСК
+@app.get("/search")
+async def search(
+    q: str = Query(..., min_length=2),
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_authenticated)
+):
+    """ПОИСК ПО ЗАДАЧАМ И ПРОЕКТАМ (TSVECTOR)"""
+    # Поиск по задачам (с использованием GIN индекса и ILIKE как фоллбек)
+    tasks = await conn.fetch("""
+        SELECT t.*, u.username as assigned_to_name, p.title as project_title, 'task' as type
+        FROM tasks t
+        JOIN projects p ON t.project_id = p.id
+        LEFT JOIN users u ON t.assigned_to = u.id
+        WHERE t.tsv @@ plainto_tsquery('russian', $1) 
+           OR t.title ILIKE $2 
+           OR t.description ILIKE $2
+        LIMIT 20
+    """, q, f"%{q}%")
     
-    result = dict(task)
-    if 'created_at' in result and result['created_at']:
-        result['created_at'] = result['created_at'].isoformat()
-    if 'updated_at' in result and result['updated_at']:
-        result['updated_at'] = result['updated_at'].isoformat()
+    # Поиск по проектам
+    projects = await conn.fetch("""
+        SELECT id, title, 'project' as type, '' as parent_title
+        FROM projects
+        WHERE title ILIKE $1 OR description ILIKE $1
+        LIMIT 5
+    """, f"%{q}%")
     
-    return result
+    return {"tasks": [dict(r) for r in tasks], "projects": [dict(r) for r in projects]}
 
 # 📈 АНАЛИТИКА И ОТЧЕТЫ
+@app.get("/analytics/stats")
+async def get_analytics(
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_authenticated)
+):
+    """ДАННЫЕ ДЛЯ ГРАФИКОВ"""
+    # 1. Распределение по статусам
+    status_counts = await conn.fetch("""
+        SELECT status, count(*) as count FROM tasks GROUP BY status
+    """)
+    
+    # 2. Нагрузка по отделам
+    dept_workload = await conn.fetch("""
+        SELECT d.name, count(t.id) as task_count
+        FROM departments d
+        LEFT JOIN projects p ON d.id = p.department_id
+        LEFT JOIN tasks t ON p.id = t.project_id
+        GROUP BY d.name
+    """)
+    
+    return {
+        "statuses": {r["status"]: r["count"] for r in status_counts},
+        "departments": {r["name"]: r["task_count"] for r in dept_workload}
+    }
 @app.get("/reports/tasks-stats/", response_model=List[dict])
 async def tasks_stats(
     conn: asyncpg.Connection = Depends(get_db),
@@ -707,6 +930,64 @@ async def remove_project_member(
         raise HTTPException(status_code=404, detail="Member not found in project")
     
     return {"message": "Member removed successfully"}
+
+@app.get("/users/department")
+async def get_department_users(
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_worker)
+):
+    """ПОЛУЧЕНИЕ СПИСКА ПОЛЬЗОВАТЕЛЕЙ ИЗ ОТДЕЛА ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ"""
+    user_info = await conn.fetchrow("SELECT department_id FROM users WHERE id = $1", current_user["user_id"])
+    if not user_info or user_info["department_id"] is None:
+        # Если у пользователя нет отдела, возвращаем его самого
+        return [{"id": current_user["user_id"], "username": current_user["username"]}]
+    
+    users = await conn.fetch("""
+        SELECT id, username FROM users 
+        WHERE department_id = $1 AND is_active = true
+        ORDER BY username
+    """, user_info["department_id"])
+    return [dict(u) for u in users]
+
+class StatusUpdate(BaseModel):
+    status: str
+
+@app.patch("/tasks/{task_id}/status")
+async def update_task_status(
+    task_id: int,
+    status_data: StatusUpdate,
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(any_worker)
+):
+    """ОБНОВЛЕНИЕ СТАТУСА ЗАДАЧИ С ЛОГИРОВАНИЕМ"""
+    # Проверяем существование задачи и доступ к проекту
+    task = await conn.fetchrow("SELECT project_id, status as old_status, title FROM tasks WHERE id = $1", task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    has_access = await check_project_access(conn, task["project_id"], current_user)
+    if not has_access:
+        raise HTTPException(status_code=403, detail="No access to this task's project")
+    
+    # Только исполнитель, менеджер отдела или админ может менять статус (для простоты пока любой с доступом к проекту)
+    await conn.execute("""
+        UPDATE tasks SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2
+    """, status_data.status, task_id)
+    
+    # Создаем запись в логе
+    action_map = {
+        'pending': 'вернул в ожидание',
+        'in_progress': 'взял в работу',
+        'completed': 'завершил'
+    }
+    action_text = action_map.get(status_data.status, f"изменил статус на {status_data.status}")
+    
+    await conn.execute("""
+        INSERT INTO task_logs (task_id, user_id, action, details)
+        VALUES ($1, $2, $3, $4)
+    """, task_id, current_user["user_id"], action_text, json.dumps({"old_status": task["old_status"], "new_status": status_data.status}))
+    
+    return {"message": "Status updated"}
 
 # 🏥 HEALTH CHECKS
 @app.get("/")

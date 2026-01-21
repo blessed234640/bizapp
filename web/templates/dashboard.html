@@ -1,161 +1,1300 @@
 <!DOCTYPE html>
-<html>
+<html lang="ru">
+
 <head>
-    <title>Business App Dashboard</title>
-    <!-- Bootstrap 5 -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <!-- Chart.js -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Premium Business Hub | Dashboard</title>
+
+    <!-- Fonts & Icons -->
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Poppins:wght@600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- Font Awesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
+
     <style>
-        .stat-card { transition: transform 0.2s; }
-        .stat-card:hover { transform: translateY(-5px); }
+        :root {
+            --primary: #6366f1;
+            --primary-glow: rgba(99, 102, 241, 0.4);
+            --bg-dark: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --text-main: #f8fafc;
+            --text-dim: #94a3b8;
+            --glass-border: rgba(255, 255, 255, 0.1);
+
+            --status-pending: #f59e0b;
+            --status-progress: #3b82f6;
+            --status-completed: #10b981;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background: var(--bg-dark);
+            color: var(--text-main);
+            min-height: 100vh;
+            overflow-x: hidden;
+            background-image:
+                radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.1) 0px, transparent 50%);
+            display: none;
+            /* Hidden until auth check */
+        }
+
+        /* Layout */
+        .dashboard-container {
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            background: rgba(15, 23, 42, 0.8);
+            border-right: 1px solid var(--glass-border);
+            backdrop-filter: blur(10px);
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+        }
+
+        .logo {
+            font-family: 'Poppins', sans-serif;
+            font-size: 1.5rem;
+            background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .nav-links {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .nav-item {
+            padding: 0.75rem 1rem;
+            border-radius: 12px;
+            color: var(--text-dim);
+            text-decoration: none;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            cursor: pointer;
+        }
+
+        .nav-item:hover,
+        .nav-item.active {
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--text-main);
+            transform: translateX(5px);
+        }
+
+        .nav-item.logout {
+            margin-top: auto;
+            color: #ef4444;
+        }
+
+        .nav-item.logout:hover {
+            background: rgba(239, 68, 68, 0.1);
+        }
+
+        /* Main Content */
+        .main-content {
+            padding: 2rem 3rem;
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+
+        .welcome h1 {
+            font-family: 'Poppins', sans-serif;
+            font-size: 1.8rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .btn-refresh {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 0.6rem 1.2rem;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+        }
+
+        .btn-refresh:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+            border-color: var(--primary);
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1.25rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .glass-card {
+            background: var(--card-bg);
+            border: 1px solid var(--glass-border);
+            backdrop-filter: blur(12px);
+            border-radius: 20px;
+            padding: 1.25rem;
+            transition: all 0.4s ease;
+        }
+
+        .stat-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            margin-bottom: 1rem;
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--primary);
+        }
+
+        .stat-value {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+        }
+
+        .stat-label {
+            color: var(--text-dim);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+        }
+
+        /* Filters */
+        .filter-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 0.4rem;
+            border-radius: 12px;
+            width: fit-content;
+        }
+
+        .filter-tab {
+            padding: 0.5rem 1.2rem;
+            border-radius: 10px;
+            cursor: pointer;
+            color: var(--text-dim);
+            transition: all 0.3s;
+            border: 1px solid transparent;
+            background: transparent;
+        }
+
+        .filter-tab:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: white;
+        }
+
+        .filter-tab.active {
+            background: var(--primary) !important;
+            color: white !important;
+            border-color: var(--primary);
+            box-shadow: 0 4px 12px var(--primary-glow);
+        }
+
+        /* Projects Section */
+        .dept-group {
+            margin-bottom: 2rem;
+        }
+
+        .dept-title {
+            font-size: 0.9rem;
+            color: var(--primary);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            border-bottom: 1px solid rgba(99, 102, 241, 0.2);
+            padding-bottom: 0.5rem;
+        }
+
+        .project-item {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--glass-border);
+            padding: 1.25rem;
+            border-radius: 16px;
+            margin-bottom: 1rem;
+            cursor: pointer;
+            transition: 0.3s;
+            position: relative;
+        }
+
+        .project-item:hover {
+            background: rgba(255, 255, 255, 0.06);
+            border-color: var(--primary);
+        }
+
+        .project-item.active {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.05);
+            box-shadow: 0 0 15px rgba(99, 102, 241, 0.2);
+        }
+
+        .project-title {
+            color: var(--text-main);
+            font-size: 1.1rem;
+            margin-bottom: 0.4rem;
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .edit-project-btn {
+            opacity: 0;
+            color: var(--text-dim);
+            transition: 0.3s;
+            font-size: 0.9rem;
+        }
+
+        .project-item:hover .edit-project-btn {
+            opacity: 1;
+        }
+
+        .edit-project-btn:hover {
+            color: var(--primary);
+        }
+
+        .project-owner {
+            font-size: 0.75rem;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin-bottom: 0.5rem;
+        }
+
+        /* Tasks Section */
+        .task-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--glass-border);
+            padding: 1.25rem;
+            border-radius: 16px;
+            margin-bottom: 1rem;
+            transition: 0.2s;
+            border-left: 4px solid var(--primary);
+        }
+
+        .task-item[data-status="pending"] {
+            border-left-color: var(--status-pending);
+        }
+
+        .task-item[data-status="in_progress"] {
+            border-left-color: var(--status-progress);
+        }
+
+        .task-item[data-status="completed"] {
+            border-left-color: var(--status-completed);
+        }
+
+        .task-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+
+        .task-status-badge {
+            font-size: 0.7rem;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-pending {
+            background: rgba(245, 158, 11, 0.1);
+            color: #fbbf24;
+        }
+
+        .status-progress {
+            background: rgba(59, 130, 246, 0.1);
+            color: #60a5fa;
+        }
+
+        .status-completed {
+            background: rgba(16, 185, 129, 0.1);
+            color: #34d399;
+        }
+
+        .task-title {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        /* Badges */
+        .meta-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .badge-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            background: rgba(255, 255, 255, 0.03);
+            padding: 4px 12px;
+            border-radius: 8px;
+        }
+
+        .badge-item i {
+            color: var(--primary);
+        }
+
+        .badge-item.owner {
+            background: rgba(99, 102, 241, 0.05);
+            color: #a5b4fc;
+        }
+
+        /* Buttons */
+        .btn-refresh {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--glass-border);
+            color: var(--text-dim);
+            padding: 0.5rem 1rem;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .btn-refresh:hover {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-in {
+            animation: fadeIn 0.4s ease forwards;
+        }
+
+        #loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--bg-dark);
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Modal styling */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(8px);
+            z-index: 2000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            width: 90%;
+            max-width: 500px;
+            padding: 2.5rem;
+            animation: modalIn 0.3s ease-out;
+        }
+
+        @keyframes modalIn {
+            from {
+                transform: scale(0.9);
+                opacity: 0;
+            }
+
+            to {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        .view-section {
+            padding-bottom: 5rem;
+        }
+
+        .kanban-tasks {
+            max-height: 70vh;
+            overflow-y: auto;
+            padding-right: 0.5rem;
+        }
+
+        .kanban-tasks::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .kanban-tasks::-webkit-scrollbar-thumb {
+            background: var(--glass-border);
+            border-radius: 10px;
+        }
     </style>
 </head>
-<body class="bg-light">
-    <!-- Навигация -->
-    <nav class="navbar navbar-dark bg-dark">
-        <div class="container-fluid">
-            <span class="navbar-brand">
-                <i class="fas fa-chart-line"></i> Business Dashboard
-            </span>
+
+<body>
+    <div id="loading-overlay">
+        <i class="fas fa-spinner fa-spin fa-3x" style="color: var(--primary)"></i>
+    </div>
+
+    <!-- MODALS -->
+    <div id="modal-project" class="modal">
+        <div class="glass-card modal-content">
+            <h2 id="project-modal-title" style="margin-bottom: 2rem;">Новый проект</h2>
+            <form id="project-form" onsubmit="handleProjectSubmit(event)">
+                <input type="hidden" id="edit-project-id">
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; margin-bottom: 0.5rem;">Название</label>
+                    <input type="text" id="proj-title" class="glass-card"
+                        style="width: 100%; background: #1e293b; color: white; border: 1px solid rgba(255,255,255,0.1); padding: 0.75rem;"
+                        required>
+                </div>
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; margin-bottom: 0.5rem;">Описание</label>
+                    <textarea id="proj-desc" class="glass-card"
+                        style="width: 100%; background: #1e293b; color: white; min-height: 100px; border: 1px solid rgba(255,255,255,0.1); padding: 0.75rem;"></textarea>
+                </div>
+                <div style="display: flex; gap: 1rem; margin-top: 2.5rem;">
+                    <button type="button" class="filter-tab"
+                        style="flex: 1; text-align: center; background: transparent; border: 1px solid rgba(255,255,255,0.2); color: white;"
+                        onclick="closeModals()">Отмена</button>
+                    <button type="submit" class="filter-tab active" style="flex: 1;">Готово</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="modal-task-detail" class="modal">
+        <div class="glass-card modal-content" style="max-width: 600px;">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2rem;">
+                <div>
+                    <h2 id="detail-task-title">...</h2>
+                    <p id="detail-task-project" class="text-dim" style="font-size: 0.9rem;"></p>
+                </div>
+                <button class="nav-item" onclick="closeModals()"
+                    style="background: rgba(255,255,255,0.1); border: none; width: 40px; height: 40px; border-radius: 50%;"><i
+                        class="fas fa-times"></i></button>
+            </div>
+
+            <div style="display: flex; gap: 0.5rem; margin-bottom: 2rem; flex-wrap: wrap;">
+                <button class="filter-tab" id="status-btn-pending" onclick="updateTaskStatus('pending')"
+                    style="font-size: 0.8rem; padding: 0.5rem 1rem;">В ожидание</button>
+                <button class="filter-tab" id="status-btn-progress" onclick="updateTaskStatus('in_progress')"
+                    style="font-size: 0.8rem; padding: 0.5rem 1rem;">В работу</button>
+                <button class="filter-tab" id="status-btn-completed" onclick="updateTaskStatus('completed')"
+                    style="font-size: 0.8rem; padding: 0.5rem 1rem;">Завершить</button>
+            </div>
+
+            <div style="margin-bottom: 2rem;">
+                <h4 style="margin-bottom: 0.5rem; font-size: 0.8rem; color: var(--text-dim);">ОПИСАНИЕ</h4>
+                <p id="detail-task-desc">...</p>
+            </div>
+
             <div>
-                <a href="/admin/" class="btn btn-outline-light btn-sm">
-                    <i class="fas fa-cog"></i> Админка
-                </a>
-            </div>
-        </div>
-    </nav>
-
-    <div class="container-fluid mt-4">
-        <div class="row">
-            <!-- Карточка проектов -->
-            <div class="col-md-3">
-                <div class="card stat-card bg-primary text-white mb-3">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between">
-                            <div>
-                                <h4 id="total-projects">0</h4>
-                                <p>Проектов</p>
-                            </div>
-                            <i class="fas fa-folder fa-2x"></i>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Карточка задач -->
-            <div class="col-md-3">
-                <div class="card stat-card bg-success text-white mb-3">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between">
-                            <div>
-                                <h4 id="total-tasks">0</h4>
-                                <p>Задач</p>
-                            </div>
-                            <i class="fas fa-tasks fa-2x"></i>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- График -->
-            <div class="col-md-6">
-                <div class="card">
-                    <div class="card-header">
-                        <h5><i class="fas fa-chart-pie"></i> Статистика задач</h5>
-                    </div>
-                    <div class="card-body">
-                        <canvas id="tasksChart" width="400" height="200"></canvas>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Список проектов -->
-        <div class="row mt-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-header d-flex justify-content-between">
-                        <h5><i class="fas fa-list"></i> Проекты</h5>
-                        <button class="btn btn-primary btn-sm" onclick="loadProjects()">
-                            <i class="fas fa-sync"></i> Обновить
-                        </button>
-                    </div>
-                    <div class="card-body">
-                        <div id="projects-list">
-                            <div class="text-center text-muted">
-                                <i class="fas fa-spinner fa-spin"></i> Загрузка...
-                            </div>
-                        </div>
-                    </div>
+                <h4 style="margin-bottom: 1.5rem; font-size: 0.8rem; color: var(--text-dim);">ИСТОРИЯ ИЗМЕНЕНИЙ
+                    (TIMELINE)</h4>
+                <div id="detail-task-timeline"
+                    style="border-left: 2px solid var(--glass-border); padding-left: 1.5rem; margin-left: 0.5rem;">
+                    <!-- Filled by JS -->
                 </div>
             </div>
         </div>
     </div>
+    <div id="modal-task" class="modal">
+        <div class="glass-card modal-content">
+            <h2 style="margin-bottom: 2rem;">Новая задача</h2>
+            <form onsubmit="handleCreateTask(event)">
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; margin-bottom: 0.5rem;">Проект</label>
+                    <select id="task-project-id" class="glass-card"
+                        style="width: 100%; background: #1e293b; color: white; border: 1px solid rgba(255,255,255,0.1); padding: 0.75rem;"
+                        required>
+                        <!-- Filled by JS -->
+                    </select>
+                </div>
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; margin-bottom: 0.5rem;">Название</label>
+                    <input type="text" id="task-title-input" class="glass-card"
+                        style="width: 100%; background: #1e293b; color: white; border: 1px solid rgba(255,255,255,0.1); padding: 0.75rem;"
+                        required>
+                </div>
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; margin-bottom: 0.5rem;">Исполнитель</label>
+                    <select id="task-assignee-id" class="glass-card"
+                        style="width: 100%; background: #1e293b; color: white; border: 1px solid rgba(255,255,255,0.1); padding: 0.75rem;">
+                        <!-- Filled by JS -->
+                    </select>
+                </div>
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; margin-bottom: 0.5rem;">Описание</label>
+                    <textarea id="task-desc-input" class="glass-card"
+                        style="width: 100%; background: #1e293b; color: white; min-height: 80px; border: 1px solid rgba(255,255,255,0.1); padding: 0.75rem;"></textarea>
+                </div>
+                <div style="margin-bottom: 1.5rem;">
+                    <label style="display: block; margin-bottom: 0.5rem;">Приоритет</label>
+                    <select id="task-priority" class="glass-card"
+                        style="width: 100%; background: #1e293b; color: white; border: 1px solid rgba(255,255,255,0.1); padding: 0.75rem;">
+                        <option value="low">Низкий</option>
+                        <option value="medium">Средний</option>
+                        <option value="high">Высокий</option>
+                    </select>
+                </div>
+                <div style="display: flex; gap: 1rem; margin-top: 2.5rem;">
+                    <button type="button" class="filter-tab"
+                        style="flex: 1; text-align: center; background: transparent; border: 1px solid rgba(255,255,255,0.2); color: white;"
+                        onclick="closeModals()">Отмена</button>
+                    <button type="submit" class="filter-tab active" style="flex: 1;">Добавить</button>
+                </div>
+            </form>
+        </div>
+    </div>
 
-    <script>
-    // Загрузка статистики задач
-    async function loadStats() {
-        try {
-            const response = await fetch('/api/reports/tasks-stats/');
-            const stats = await response.json();
-            
-            // Обновляем счетчик задач
-            const totalTasks = stats.reduce((sum, item) => sum + item.count, 0);
-            document.getElementById('total-tasks').textContent = totalTasks;
-            
-            // Строим график
-            createChart(stats);
-        } catch (error) {
-            console.error('Ошибка загрузки статистики:', error);
-        }
-    }
+    <div class="dashboard-container">
+        <aside class="sidebar">
+            <div class="logo"><i class="fas fa-bolt"></i> BIZHUB</div>
+            <nav class="nav-links">
+                <a class="nav-item active" onclick="switchView('overview')"><i class="fas fa-home"></i> Обзор</a>
 
-    // Загрузка проектов
-    async function loadProjects() {
-        try {
-            const response = await fetch('/api/projects/');
-            const projects = await response.json();
-            
-            const projectsList = document.getElementById('projects-list');
-            projectsList.innerHTML = projects.map(project => `
-                <div class="card mb-2">
-                    <div class="card-body">
-                        <h6 class="card-title">${project.title}</h6>
-                        <p class="card-text text-muted">${project.description || 'Нет описания'}</p>
-                        <small class="text-muted">
-                            Создан: ${new Date(project.created_at).toLocaleDateString()}
-                        </small>
+                <!-- Manager/Admin Actions -->
+                <div id="manager-actions"
+                    style="display: none; border-top: 1px solid var(--glass-border); padding-top: 1rem; margin-top: 1rem;">
+                    <a class="nav-item" onclick="openCreateProjectModal()"><i class="fas fa-plus-circle"
+                            style="color: #10b981"></i> Создать проект</a>
+                    <a class="nav-item" onclick="openCreateTaskModal()"><i class="fas fa-tasks"
+                            style="color: #3b82f6"></i> Создать задачу</a>
+                </div>
+
+                <a class="nav-item" onclick="switchView('kanban')"><i class="fas fa-columns"></i> Доска (Kanban)</a>
+                <a class="nav-item" onclick="switchView('analytics')"><i class="fas fa-chart-pie"></i> Аналитика
+                    (BI)</a>
+                <a class="nav-item" onclick="switchView('profile')"><i class="fas fa-user-circle"></i> Профиль</a>
+
+                <a href="/admin/" class="nav-item" id="admin-link" style="display: none;"><i class="fas fa-cog"></i>
+                    Админка</a>
+                <a class="nav-item logout" onclick="logout()"><i class="fas fa-sign-out-alt"></i> Выйти</a>
+            </nav>
+        </aside>
+
+        <main class="main-content">
+            <header>
+                <div class="welcome">
+                    <h1>Центр Управления</h1>
+                    <p class="text-dim">Департаменты и проекты компании</p>
+                </div>
+                <div class="user-info" style="display: flex; align-items: center; gap: 1.5rem;">
+                    <div class="search-box glass-card"
+                        style="padding: 0.5rem 1rem; display: flex; align-items: center; gap: 0.5rem; width: 300px;">
+                        <i class="fas fa-search" style="color: var(--text-dim)"></i>
+                        <input type="text" id="global-search" placeholder="Поиск задач..."
+                            style="background: transparent; border: none; color: white; width: 100%; outline: none;">
+                    </div>
+                    <button class="btn-refresh" onclick="loadContent()"><i class="fas fa-sync"></i> Обновить</button>
+                </div>
+            </header>
+
+            <div class="stats-grid">
+                <div class="glass-card">
+                    <div class="stat-icon"><i class="fas fa-sitemap"></i></div>
+                    <div class="stat-value" id="total-projects">0</div>
+                    <div class="stat-label">Проектов</div>
+                </div>
+                <div class="glass-card">
+                    <div class="stat-icon"><i class="fas fa-tasks"></i></div>
+                    <div class="stat-value" id="total-tasks">0</div>
+                    <div class="stat-label">Задач</div>
+                </div>
+                <div class="glass-card">
+                    <div class="stat-icon"><i class="fas fa-user-shield"></i></div>
+                    <div class="stat-value" id="user-role" style="text-transform: capitalize;">...</div>
+                    <div class="stat-label" id="user-dept">Загрузка...</div>
+                </div>
+            </div>
+
+            <!-- MAIN CONTENT SECTIONS -->
+            <div id="view-overview" class="view-section">
+                <div class="content-grid" style="display: grid; grid-template-columns: 1fr 1.5fr; gap: 2.5rem;">
+                    <!-- Projects -->
+                    <section>
+                        <div class="section-title" style="margin-bottom: 1.5rem;">
+                            <h2>Проекты по отделам</h2>
+                        </div>
+                        <div id="projects-list">
+                            <!-- Filled by JS -->
+                        </div>
+                    </section>
+
+                    <!-- Tasks -->
+                    <section>
+                        <div class="tasks-header"
+                            style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                            <h2 id="tasks-title">Все задачи</h2>
+                            <div class="filter-tabs" id="status-filters">
+                                <button class="filter-tab active" data-status="all"
+                                    onclick="filterTasksByStatus('all')">Все</button>
+                                <button class="filter-tab" data-status="pending"
+                                    onclick="filterTasksByStatus('pending')">Ожидание</button>
+                                <button class="filter-tab" data-status="in_progress"
+                                    onclick="filterTasksByStatus('in_progress')">В работе</button>
+                                <button class="filter-tab" data-status="completed"
+                                    onclick="filterTasksByStatus('completed')">Завершено</button>
+                            </div>
+                        </div>
+                        <div id="tasks-list">
+                            <!-- Filled by JS -->
+                        </div>
+                    </section>
+                </div>
+            </div>
+
+            <div id="view-analytics" class="view-section" style="display: none;">
+                <div class="section-title">
+                    <h2>Аналитика (BI)</h2>
+                </div>
+                <div class="stats-grid" style="grid-template-columns: 1fr 1fr; margin-top: 2rem;">
+                    <div class="glass-card">
+                        <canvas id="tasks-distribution-chart"></canvas>
+                    </div>
+                    <div class="glass-card">
+                        <canvas id="dept-workload-chart"></canvas>
                     </div>
                 </div>
-            `).join('');
-        } catch (error) {
-            console.error('Ошибка загрузки проектов:', error);
+            </div>
+
+            <div id="view-profile" class="view-section" style="display: none;">
+                <div class="section-title">
+                    <h2>Личный профиль</h2>
+                </div>
+                <div class="glass-card" style="max-width: 600px; margin-top: 2rem;">
+                    <div style="display: flex; align-items: center; gap: 2rem; margin-bottom: 2rem;">
+                        <img id="profile-avatar" src="https://ui-avatars.com/api/?name=User"
+                            style="width: 100px; height: 100px; border-radius: 50%; border: 2px solid var(--primary);">
+                        <div>
+                            <h3 id="profile-username">Загрузка...</h3>
+                            <p class="text-dim" id="profile-role">...</p>
+                        </div>
+                    </div>
+                    <form id="profile-form" onsubmit="updateProfile(event)">
+                        <div style="margin-bottom: 1.5rem;">
+                            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem;">Email</label>
+                            <input type="email" id="edit-email" class="glass-card"
+                                style="width: 100%; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); color: white; padding: 0.5rem;">
+                        </div>
+                        <div style="margin-bottom: 1.5rem;">
+                            <label style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem;">URL Аватара</label>
+                            <input type="text" id="edit-avatar" class="glass-card"
+                                style="width: 100%; background: rgba(255,255,255,0.05); border: 1px solid var(--glass-border); color: white; padding: 0.5rem;">
+                        </div>
+                        <button type="submit" class="filter-tab active" style="width: 100%;">Сохранить
+                            изменения</button>
+                    </form>
+
+                    <div style="margin-top: 3rem; border-top: 1px solid var(--glass-border); padding-top: 2rem;">
+                        <h3>Повышение роли</h3>
+                        <p class="text-dim" style="font-size: 0.9rem; margin-bottom: 1rem;">Хотите больше прав?
+                            Отправьте запрос администратору.</p>
+                        <form onsubmit="submitUpgradeRequest(event)">
+                            <select id="requested-role" class="glass-card"
+                                style="width: 100%; background: rgba(255,255,255,0.05); color: white; margin-bottom: 1rem; border: 1px solid var(--glass-border); padding: 0.5rem;">
+                                <option value="user">Пользователь (создание задач)</option>
+                                <option value="manager">Менеджер (управление проектами)</option>
+                            </select>
+                            <textarea id="upgrade-reason" class="glass-card" placeholder="Почему вам нужна эта роль?"
+                                style="width: 100%; background: rgba(255,255,255,0.05); color: white; min-height: 100px; margin-bottom: 1rem; border: 1px solid var(--glass-border); padding: 0.5rem;"></textarea>
+                            <button type="submit" class="btn-refresh" style="width: 100%;">Отправить запрос</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div id="view-kanban" class="view-section" style="display: none;">
+                <div class="section-title">
+                    <h2>Канбан-доска</h2>
+                </div>
+                <div class="kanban-board"
+                    style="display: grid; grid-template-columns: repeat(3, 11fr); gap: 1.5rem; margin-top: 2rem;">
+                    <div class="kanban-col glass-card" data-status="pending">
+                        <h4 style="color: var(--status-pending); margin-bottom: 1rem;">ОЖИДАНИЕ</h4>
+                        <div class="kanban-tasks" id="kanban-pending" style="min-height: 200px;"></div>
+                    </div>
+                    <div class="kanban-col glass-card" data-status="in_progress">
+                        <h4 style="color: var(--status-progress); margin-bottom: 1rem;">В РАБОТЕ</h4>
+                        <div class="kanban-tasks" id="kanban-in_progress" style="min-height: 200px;"></div>
+                    </div>
+                    <div class="kanban-col glass-card" data-status="completed">
+                        <h4 style="color: var(--status-completed); margin-bottom: 1rem;">ЗАВЕРШЕНО</h4>
+                        <div class="kanban-tasks" id="kanban-completed" style="min-height: 200px;"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000'; // FastAPI
+        let allTasks = [];
+        let allProjects = [];
+        let activeProjectId = null;
+        let activeTaskId = null;
+        let activeStatus = 'all';
+        let charts = { status: null, dept: null };
+
+        const statusMap = {
+            'pending': { label: 'В ожидании', class: 'status-pending' },
+            'in_progress': { label: 'В работе', class: 'status-progress' },
+            'completed': { label: 'Завершено', class: 'status-completed' }
+        };
+
+        function getPriorityColor(p) {
+            if (p === 2 || p === 'high' || p === 'Высокий') return '#ef4444';
+            if (p === 1 || p === 'medium' || p === 'Средний') return '#3b82f6';
+            return '#10b981';
         }
-    }
 
-    // Создание графика
-    function createChart(stats) {
-        const ctx = document.getElementById('tasksChart').getContext('2d');
-        new Chart(ctx, {
-            type: 'pie',
-            data: {
-                labels: stats.map(item => item.status),
-                datasets: [{
-                    data: stats.map(item => item.count),
-                    backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0']
-                }]
+        function getStatusColor(s) {
+            if (s === 'completed' || s === 'Завершено') return '#10b981';
+            if (s === 'in_progress' || s === 'В работе') return '#3b82f6';
+            return '#f59e0b';
+        }
+
+        // AUTH CHECK
+        async function checkAuth() {
+            const token = localStorage.getItem('bizhub_token');
+            if (!token) {
+                window.location.href = '/login/';
+                return;
             }
-        });
-    }
 
-    // Загружаем данные при старте
-    document.addEventListener('DOMContentLoaded', function() {
-        loadStats();
-        loadProjects();
-    });
+            try {
+                const response = await fetch(`${API_BASE}/auth/me`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (!response.ok) throw new Error();
+
+                const user = await response.json();
+                document.getElementById('user-role').innerText = user.role;
+                document.getElementById('user-dept').innerText = `Отдел: ${user.department_name || 'Общий'}`;
+
+                if (user.role === 'admin' || user.role === 'manager') {
+                    document.getElementById('manager-actions').style.display = 'block';
+                }
+                if (user.role === 'admin') {
+                    document.getElementById('admin-link').style.display = 'flex';
+                }
+
+                document.body.style.display = 'block';
+                document.getElementById('loading-overlay').style.display = 'none';
+
+                loadContent();
+            } catch (err) {
+                localStorage.removeItem('bizhub_token');
+                window.location.href = '/login/';
+            }
+        }
+
+        async function fetchWithAuth(endpoint) {
+            const token = localStorage.getItem('bizhub_token');
+            const response = await fetch(`${API_BASE}${endpoint}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (!response.ok) throw new Error('API Error');
+            return response.json();
+        }
+
+        async function loadContent() {
+            await Promise.all([loadProjects(), loadTasks()]);
+        }
+
+        async function loadProjects() {
+            const list = document.getElementById('projects-list');
+            try {
+                allProjects = await fetchWithAuth('/projects/');
+                document.getElementById('total-projects').innerText = allProjects.length;
+
+                const grouped = allProjects.reduce((acc, p) => {
+                    const dept = p.department_name || 'БЕЗ ОТДЕЛА';
+                    if (!acc[dept]) acc[dept] = [];
+                    acc[dept].push(p);
+                    return acc;
+                }, {});
+
+                list.innerHTML = Object.entries(grouped).map(([dept, projs]) => `
+                    <div class="dept-group">
+                        <div class="dept-title"><i class="fas fa-building"></i> ${dept}</div>
+                        ${projs.map(p => `
+                            <div class="project-item ${activeProjectId === p.id ? 'active' : ''}" id="proj-${p.id}" onclick="filterTasksByProject(${p.id}, '${p.title}')">
+                                <div class="project-title">
+                                    <span>${p.title}</span>
+                                    <i class="fas fa-edit edit-project-btn" onclick="event.stopPropagation(); openEditProjectModal(${p.id})" title="Редактировать"></i>
+                                </div>
+                                <div class="project-owner"><i class="fas fa-crown"></i> Ответственный: ${p.owner_name}</div>
+                                <p class="project-desc text-dim">${p.description || 'Описание отсутствует'}</p>
+                            </div>
+                        `).join('')}
+                    </div>
+                `).join('');
+            } catch (err) {
+                list.innerHTML = '<div style="color: #ef4444">Ошибка загрузки проектов</div>';
+            }
+        }
+
+        async function loadTasks() {
+            const list = document.getElementById('tasks-list');
+            try {
+                allTasks = await fetchWithAuth('/tasks/');
+                document.getElementById('total-tasks').innerText = allTasks.length;
+                applyFilters();
+            } catch (err) {
+                list.innerHTML = '<div style="color: #ef4444; padding: 2rem;">Ошибка загрузки задач</div>';
+            }
+        }
+
+        function filterTasksByProject(id, title) {
+            if (activeProjectId === id) {
+                activeProjectId = null;
+                document.querySelectorAll('.project-item').forEach(el => el.classList.remove('active'));
+                document.getElementById('tasks-title').innerText = 'Все задачи';
+            } else {
+                activeProjectId = id;
+                document.querySelectorAll('.project-item').forEach(el => el.classList.remove('active'));
+                document.getElementById(`proj-${id}`).classList.add('active');
+                document.getElementById('tasks-title').innerText = `Проект: ${title}`;
+            }
+            applyFilters();
+        }
+
+        async function loadAnalytics() {
+            const data = await fetchWithAuth('/analytics/stats');
+
+            // Status Distribution
+            const statusCtx = document.getElementById('tasks-distribution-chart').getContext('2d');
+            if (charts.status) charts.status.destroy();
+            charts.status = new Chart(statusCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(data.statuses).map(s => s === 'pending' ? 'Ожидание' : s === 'in_progress' ? 'В работе' : 'Завершено'),
+                    datasets: [{
+                        data: Object.values(data.statuses),
+                        backgroundColor: ['#f59e0b', '#3b82f6', '#10b981'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    plugins: {
+                        title: { display: true, text: 'Статусы задач', color: '#fff' },
+                        legend: { labels: { color: '#fff' } }
+                    }
+                }
+            });
+
+            // Dept Workload
+            const deptCtx = document.getElementById('dept-workload-chart').getContext('2d');
+            if (charts.dept) charts.dept.destroy();
+            charts.dept = new Chart(deptCtx, {
+                type: 'bar',
+                data: {
+                    labels: Object.keys(data.departments),
+                    datasets: [{
+                        label: 'Кол-во задач',
+                        data: Object.values(data.departments),
+                        backgroundColor: '#8b5cf6'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { ticks: { color: '#fff' } },
+                        x: { ticks: { color: '#fff' } }
+                    },
+                    plugins: { legend: { labels: { color: '#fff' } } }
+                }
+            });
+        }
+
+        async function loadKanban() {
+            const tasks = await fetchWithAuth('/tasks/');
+            const cols = {
+                'pending': document.getElementById('kanban-pending'),
+                'in_progress': document.getElementById('kanban-in_progress'),
+                'completed': document.getElementById('kanban-completed')
+            };
+
+            Object.values(cols).forEach(c => c.innerHTML = '');
+
+            tasks.forEach(t => {
+                const card = document.createElement('div');
+                card.className = 'glass-card task-item';
+                card.style.padding = '1rem';
+                card.style.marginBottom = '1rem';
+                card.style.cursor = 'pointer';
+                card.setAttribute('onclick', `showTaskDetails(${t.id})`);
+                card.innerHTML = `
+                    <div style="font-size: 0.8rem; color: var(--primary); margin-bottom: 0.5rem;">${t.project_title}</div>
+                    <div style="font-weight: 500;">${t.title}</div>
+                    <div style="font-size: 0.8rem; color: var(--text-dim); margin-top: 0.5rem;">
+                        <i class="fas fa-user"></i> ${t.assigned_to_name || 'Не назначен'}
+                    </div>
+                `;
+                if (cols[t.status]) cols[t.status].appendChild(card);
+            });
+        }
+
+        function switchView(view) {
+            document.querySelectorAll('.view-section').forEach(s => s.style.display = 'none');
+            document.getElementById(`view-${view}`).style.display = 'block';
+
+            document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+            const activeItem = Array.from(document.querySelectorAll('.nav-item')).find(i => i.textContent.includes(
+                view === 'overview' ? 'Обзор' :
+                    view === 'kanban' ? 'Доска' :
+                        view === 'analytics' ? 'Аналитика' : 'Профиль'
+            ));
+            if (activeItem) activeItem.classList.add('active');
+
+            if (view === 'analytics') loadAnalytics();
+            if (view === 'kanban') loadKanban();
+            if (view === 'profile') loadProfileData();
+        }
+
+        async function showTaskDetails(taskId) {
+            const tasks = await fetchWithAuth('/tasks/');
+            const task = tasks.find(t => t.id === taskId);
+            if (!task) return;
+
+            activeTaskId = taskId; // Global to preserve current task
+            document.getElementById('detail-task-title').innerText = task.title;
+            document.getElementById('detail-task-project').innerText = task.project_title;
+            document.getElementById('detail-task-desc').innerText = task.description || 'Нет описания';
+
+            // Highlight active status
+            document.querySelectorAll('#modal-task-detail .filter-tab').forEach(b => b.classList.remove('active'));
+            if (task.status === 'pending') document.getElementById('status-btn-pending').classList.add('active');
+            if (task.status === 'in_progress') document.getElementById('status-btn-progress').classList.add('active');
+            if (task.status === 'completed') document.getElementById('status-btn-completed').classList.add('active');
+
+            const logs = await fetchWithAuth(`/tasks/${taskId}/logs`);
+            const timeline = document.getElementById('detail-task-timeline');
+            timeline.innerHTML = logs.map(l => `
+                <div style="position: relative; margin-bottom: 1.5rem;">
+                    <div style="position: absolute; left: -1.9rem; top: 0; width: 10px; height: 10px; border-radius: 50%; background: var(--primary);"></div>
+                    <div style="font-size: 0.8rem; color: var(--text-dim);">${new Date(l.timestamp).toLocaleString()}</div>
+                    <div style="font-size: 0.9rem;"><strong style="color: var(--primary);">${l.username}</strong>: ${l.action}</div>
+                    <div style="font-size: 0.8rem; color: var(--text-dim);">${l.details || ''}</div>
+                </div>
+            `).join('');
+
+            document.getElementById('modal-task-detail').style.display = 'flex';
+        }
+
+        async function updateTaskStatus(newStatus) {
+            if (!activeTaskId) return;
+            try {
+                const token = localStorage.getItem('bizhub_token');
+                const response = await fetch(`${API_BASE}/tasks/${activeTaskId}/status`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ status: newStatus })
+                });
+                if (response.ok) {
+                    showTaskDetails(activeTaskId);
+                    loadTasks();
+                    if (document.getElementById('view-kanban').style.display === 'block') loadKanban();
+                }
+            } catch (err) { alert('Ошибка обновления статуса'); }
+        }
+        async function loadProfileData() {
+            const user = await fetchWithAuth('/auth/me');
+            document.getElementById('profile-username').innerText = user.username;
+            document.getElementById('profile-role').innerText = `Роль: ${user.role}`;
+            document.getElementById('edit-email').value = user.email || '';
+            document.getElementById('edit-avatar').value = user.avatar_url || '';
+            if (user.avatar_url) document.getElementById('profile-avatar').src = user.avatar_url;
+        }
+
+        async function updateProfile(e) {
+            e.preventDefault();
+            const email = document.getElementById('edit-email').value;
+            const avatar_url = document.getElementById('edit-avatar').value;
+
+            try {
+                const token = localStorage.getItem('bizhub_token');
+                const response = await fetch(`${API_BASE}/auth/profile`, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, avatar_url })
+                });
+                if (response.ok) {
+                    alert('Профиль обновлен!');
+                    loadProfileData();
+                }
+            } catch (err) { alert('Ошибка обновления'); }
+        }
+
+        async function submitUpgradeRequest(e) {
+            e.preventDefault();
+            const requested_role = document.getElementById('requested-role').value;
+            const reason = document.getElementById('upgrade-reason').value;
+
+            try {
+                const token = localStorage.getItem('bizhub_token');
+                const response = await fetch(`${API_BASE}/auth/upgrade-request`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ requested_role, reason })
+                });
+                if (response.ok) {
+                    alert('Заявка отправлена!');
+                    e.target.reset();
+                }
+            } catch (err) { alert('Ошибка отправки'); }
+        }
+
+        // --- SEARCH ---
+        document.getElementById('global-search').addEventListener('input', async (e) => {
+            const q = e.target.value;
+            if (q.length < 2) {
+                if (activeProjectId === null) applyFilters();
+                return;
+            }
+
+            try {
+                const results = await fetchWithAuth(`/search?q=${encodeURIComponent(q)}`);
+                renderTasksFromSearch(results.tasks);
+            } catch (err) { console.error(err); }
+        });
+
+        // --- MODALS ---
+        function openCreateProjectModal() {
+            document.getElementById('project-modal-title').innerText = 'Новый проект';
+            document.getElementById('edit-project-id').value = '';
+            document.getElementById('proj-title').value = '';
+            document.getElementById('proj-desc').value = '';
+            document.getElementById('modal-project').style.display = 'flex';
+        }
+
+        function openEditProjectModal(id) {
+            const p = allProjects.find(p => p.id === id);
+            if (!p) return;
+            document.getElementById('project-modal-title').innerText = 'Редактировать проект';
+            document.getElementById('edit-project-id').value = id;
+            document.getElementById('proj-title').value = p.title;
+            document.getElementById('proj-desc').value = p.description || '';
+            document.getElementById('modal-project').style.display = 'flex';
+        }
+
+        async function handleProjectSubmit(e) {
+            e.preventDefault();
+            const id = document.getElementById('edit-project-id').value;
+            const title = document.getElementById('proj-title').value;
+            const description = document.getElementById('proj-desc').value;
+            const token = localStorage.getItem('bizhub_token');
+
+            try {
+                const url = id ? `${API_BASE}/projects/${id}` : `${API_BASE}/projects/`;
+                const method = id ? 'PATCH' : 'POST';
+                const response = await fetch(url, {
+                    method: method,
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ title, description })
+                });
+                if (response.ok) {
+                    closeModals();
+                    loadProjects();
+                    e.target.reset();
+                } else {
+                    const data = await response.json();
+                    alert(`Ошибка: ${data.detail || 'Не удалось сохранить'}`);
+                }
+            } catch (err) { alert('Ошибка сохранения проекта'); }
+        }
+
+        async function openCreateTaskModal() {
+            const select = document.getElementById('task-project-id');
+            select.innerHTML = allProjects.map(p => `<option value="${p.id}">${p.title}</option>`).join('');
+
+            // Fetch department users
+            const users = await fetchWithAuth('/users/department');
+            const userSelect = document.getElementById('task-assignee-id');
+            userSelect.innerHTML = users.map(u => `<option value="${u.id}">${u.username}</option>`).join('');
+
+            document.getElementById('modal-task').style.display = 'flex';
+        }
+
+        function closeModals() {
+            document.querySelectorAll('.modal').forEach(m => m.style.display = 'none');
+        }
+
+
+        async function handleCreateTask(e) {
+            e.preventDefault();
+            const project_id = document.getElementById('task-project-id').value;
+            const title = document.getElementById('task-title-input').value;
+            const description = document.getElementById('task-desc-input').value;
+            const assignee_id = document.getElementById('task-assignee-id').value;
+            const priority = document.getElementById('task-priority').value;
+
+            try {
+                const token = localStorage.getItem('bizhub_token');
+                const response = await fetch(`${API_BASE}/tasks/`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        project_id: parseInt(project_id),
+                        title,
+                        description,
+                        assignee_id: parseInt(assignee_id),
+                        priority,
+                        status: 'pending'
+                    })
+                });
+                if (response.ok) {
+                    closeModals();
+                    loadTasks();
+                    e.target.reset();
+                } else {
+                    const data = await response.json();
+                    alert(`Ошибка: ${data.detail || 'Не удалось создать задачу'}`);
+                }
+            } catch (err) { alert('Ошибка создания задачи'); }
+        }
+
+        function filterTasksByStatus(status) {
+            activeStatus = status;
+            document.querySelectorAll('#status-filters .filter-tab').forEach(b => {
+                b.classList.toggle('active', b.getAttribute('data-status') === status);
+            });
+            applyFilters();
+        }
+
+        function renderTasksFromSearch(tasks) {
+            renderTasks(tasks);
+            document.getElementById('tasks-title').innerText = 'Результаты поиска';
+        }
+
+        function applyFilters() {
+            let filtered = allTasks;
+            if (activeProjectId) filtered = filtered.filter(t => t.project_id === activeProjectId);
+            if (activeStatus !== 'all') filtered = filtered.filter(t => t.status === activeStatus);
+            renderTasks(filtered);
+        }
+
+        function renderTasks(tasks) {
+            const list = document.getElementById('tasks-list');
+            if (tasks.length === 0) {
+                list.innerHTML = '<div class="glass-card" style="text-align: center; color: var(--text-dim); padding: 4rem;">Задач не найдено</div>';
+                return;
+            }
+
+            list.innerHTML = tasks.map(t => {
+                const s = statusMap[t.status] || { label: t.status, class: '' };
+                return `
+                <div class="task-card animate-in" onclick="showTaskDetails(${t.id})" style="cursor: pointer; margin-bottom: 1.5rem;">
+                    <div class="task-meta">
+                        <span class="meta-badge" style="background: var(--glass-bg)"><i class="fas fa-folder"></i> ${t.project_title}</span>
+                        <span class="meta-badge" style="background: ${getPriorityColor(t.priority)}15; color: ${getPriorityColor(t.priority)}">${t.priority}</span>
+                    </div>
+                    <h3 class="task-card-title" style="margin: 0.5rem 0;">${t.title}</h3>
+                    <p class="task-card-desc text-dim" style="font-size: 0.85rem; margin-bottom: 1rem;">${t.description || 'Нет описания'}</p>
+                    <div class="task-footer">
+                        <div class="assignee"><i class="fas fa-user-circle"></i> ${t.assigned_to_name || 'Не назначен'}</div>
+                        <div class="status-badge" style="background: ${getStatusColor(t.status)}15; color: ${getStatusColor(t.status)}">
+                            ${t.status === 'pending' ? 'Ожидание' : t.status === 'in_progress' ? 'В работе' : 'Завершено'}
+                        </div>
+                    </div>
+                </div>
+                `;
+            }).join('');
+        }
+
+        function logout() {
+            localStorage.removeItem('bizhub_token');
+            window.location.href = '/login/';
+        }
+
+        document.addEventListener('DOMContentLoaded', checkAuth);
     </script>
 </body>
+
 </html>
