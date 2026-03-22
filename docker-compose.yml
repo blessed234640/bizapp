@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # База данных PostgreSQL
   db:
@@ -12,6 +10,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
     networks:
       - backend
 
@@ -27,35 +26,49 @@ services:
   api:
     build: ./api
     ports:
-      - "8000:8000"
+      - "8001:8000"
     depends_on:
       - db
       - redis
-    environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/bizapp
-      - REDIS_URL=redis://redis:6379
+    env_file:
+      - .env
     networks:
       - backend
     volumes:
       - ./api:/app
+      - ./.env:/app/.env
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
   # Django приложение
   web:
     build: ./web
     ports:
-      - "8080:8080"
+      - "8081:8080"
     depends_on:
       - db
       - redis
-    environment:
-      - DATABASE_URL=postgresql://user:password@db:5432/bizapp
-      - REDIS_URL=redis://redis:6379
+    env_file:
+      - .env
     networks:
       - backend
     volumes:
       - ./web:/app
-    command: python manage.py runserver 0.0.0.0:8080
+      - ./.env:/app/.env
+    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8080"
+
+  # pgAdmin для графического управления БД
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    networks:
+      - backend
+    depends_on:
+      - db
 
 volumes:
   postgres_data:

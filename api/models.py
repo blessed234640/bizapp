@@ -26,11 +26,21 @@ class UserLogin(BaseModel):
 class UserResponse(BaseModel):
     id: int
     username: str
-    email: str
+    email: Optional[str] = None
     role: UserRole
     is_active: bool
     created_at: datetime
-    # Убираем full_name, position, department - это в Django
+    department_id: Optional[int] = None
+    department_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+class ProfileUpdate(BaseModel):
+    email: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+class UpgradeRequestCreate(BaseModel):
+    requested_role: UserRole
+    reason: str
 
 # МОДЕЛЬ ДЛЯ JWT ТОКЕНОВ
 class Token(BaseModel):

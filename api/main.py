@@ -1020,6 +1020,28 @@ async def clear_cache(
     redis.flushdb()
     return {"message": "Кэш полностью очищен"}
 
+# 🔍 DEBUG ENDPOINT - List all tables
+@app.get("/debug/tables")
+async def list_tables(
+    conn: asyncpg.Connection = Depends(get_db),
+    current_user: dict = Depends(admin_only)
+):
+    """Вывод всех таблиц в базе данных (только для админов)"""
+    tables = await conn.fetch("""
+        SELECT 
+            table_name,
+            (SELECT COUNT(*) FROM information_schema.columns 
+             WHERE table_name = t.table_name AND table_schema = 'public') as column_count
+        FROM information_schema.tables t
+        WHERE table_schema = 'public' 
+        ORDER BY table_name;
+    """)
+    
+    return {
+        "total": len(tables),
+        "tables": [{"name": t["table_name"], "columns": t["column_count"]} for t in tables]
+    }
+
 @app.delete("/cache/tasks/")
 async def clear_tasks_cache(
     redis: redis_lib.Redis = Depends(get_redis), 

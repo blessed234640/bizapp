@@ -1,20 +1,23 @@
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+load_dotenv('/app/.env')
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-90+b-a90gjb_e6*7fl55$s8lx#b@c0_ad+4u(1-i-or%)^7#qf'
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-90+b-a90gjb_e6*7fl55$s8lx#b@c0_ad+4u(1-i-or%)^7#qf')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 
 # Application definition
@@ -62,15 +65,12 @@ WSGI_APPLICATION = 'bizweb.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
+import dj_database_url
+
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'bizapp',
-        'USER': 'user',
-        'PASSWORD': 'password',
-        'HOST': 'db',  # Имя сервиса в Docker
-        'PORT': '5432',
-    }
+    'default': dj_database_url.config(
+        default=os.getenv('DATABASE_URL', 'postgresql://user:password@db:5432/bizapp')
+    )
 }
 
 

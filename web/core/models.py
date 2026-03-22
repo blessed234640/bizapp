@@ -1,5 +1,17 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.utils import timezone
+
+class Department(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    description = models.TextField(null=True, blank=True)
+
+    class Meta:
+        managed = False
+        db_table = 'departments'
+
+    def __str__(self):
+        return self.name
 
 class User(AbstractUser):
     ROLE_CHOICES = (
@@ -9,62 +21,34 @@ class User(AbstractUser):
         ('admin', 'Администратор'),
     )
     
-    # Явно переопределяем ВСЕ поля чтобы избежать конфликтов
-    username = models.CharField(max_length=50, unique=True)
-    email = models.EmailField(unique=True)
-    password_hash = models.CharField(max_length=255)
+    email = models.EmailField(unique=True, null=True, blank=True)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='guest')
+    department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True)
     
-    # Поля для Django
-    first_name = models.CharField(max_length=150, blank=True)
-    last_name = models.CharField(max_length=150, blank=True)
-    is_active = models.BooleanField(default=True)
-    is_staff = models.BooleanField(default=False)
-    is_superuser = models.BooleanField(default=False)
-    last_login = models.DateTimeField(null=True, blank=True)
-    date_joined = models.DateTimeField(auto_now_add=True)
-
-    # Кастомные related_name
-    groups = models.ManyToManyField(
-        'auth.Group',
-        verbose_name='groups',
-        blank=True,
-        related_name="core_user_set",
-        related_query_name="core_user",
-    )
-    user_permissions = models.ManyToManyField(
-        'auth.Permission',
-        verbose_name='user permissions',
-        blank=True,
-        related_name="core_user_set", 
-        related_query_name="core_user",
-    )
-
-    USERNAME_FIELD = 'username'
-    REQUIRED_FIELDS = ['email']
+    from .managers import CustomUserManager
+    objects = CustomUserManager()
 
     class Meta:
         managed = False
         db_table = 'users'
+
+    def save(self, *args, **kwargs):
+        # Convert empty string email to None (NULL in DB) to satisfy unique constraint
+        if self.email == "":
+            self.email = None
+
+        # Синхронизируем флаги доступа Django с нашей ролью
+        if self.role == 'admin':
+            self.is_superuser = True
+            self.is_staff = True
+        else:
+            self.is_superuser = False
+            self.is_staff = False
+            
+        super().save(*args, **kwargs)
     
     def __str__(self):
         return f"{self.username} ({self.role})"
-    
-    def set_password(self, raw_password):
-        from django.contrib.auth.hashers import make_password
-        self.password_hash = make_password(raw_password)
-    
-    def check_password(self, raw_password):
-        from django.contrib.auth.hashers import check_password
-        return check_password(raw_password, self.password_hash)
-    
-    @property
-    def password(self):
-        return self.password_hash
-    
-    @password.setter
-    def password(self, raw_password):
-        self.set_password(raw_password)
 
 class RoleUpgradeRequest(models.Model):
     STATUS_CHOICES = (
@@ -79,7 +63,7 @@ class RoleUpgradeRequest(models.Model):
         related_name='role_upgrade_requests'
     )
     requested_role = models.CharField(max_length=20, choices=User.ROLE_CHOICES)
-    current_user_role = models.CharField(max_length=20, choices=User.ROLE_CHOICES)  # ИЗМЕНИЛ current_role на current_user_role
+    current_user_role = models.CharField(max_length=20, choices=User.ROLE_CHOICES)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
     reason = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -91,26 +75,43 @@ class RoleUpgradeRequest(models.Model):
         blank=True,
         related_name='reviewed_requests'
     )
-    
+
     class Meta:
+        managed = False
         db_table = 'role_upgrade_requests'
         ordering = ['-created_at']
-    
-    def __str__(self):
-        return f"{self.user.username} -> {self.requested_role} ({self.status})"
+
+    def save(self, *args, **kwargs):
+        # Если заявка одобрена, автоматически меняем роль пользователя
+        if self.status == 'approved' and self.id:
+            old_instance = RoleUpgradeRequest.objects.get(id=self.id)
+            if old_instance.status != 'approved':
+                user = self.user
+                user.role = self.requested_role
+                user.save()
+                self.reviewed_at = timezone.now()
+        super().save(*args, **kwargs)
 
 class Project(models.Model):
     title = models.CharField(max_length=100)
     description = models.TextField(null=True)
+    department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     owner = models.ForeignKey(User, on_delete=models.CASCADE)
 
     class Meta:
         managed = False
         db_table = 'projects'
-    
-    def __str__(self):
-        return self.title
+
+class ProjectMember(models.Model):
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='members')
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed = False
+        db_table = 'project_members'
+        unique_together = ('project', 'user')
 
 class Task(models.Model):
     STATUS_CHOICES = (
@@ -125,9 +126,6 @@ class Task(models.Model):
     description = models.TextField(null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     priority = models.IntegerField(default=0)
-    metadata = models.JSONField(null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
     assigned_to = models.ForeignKey(
         User, 
         on_delete=models.SET_NULL, 
@@ -136,13 +134,13 @@ class Task(models.Model):
         related_name='assigned_tasks',
         db_column='assigned_to'
     )
+    metadata = models.JSONField(null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         managed = False
         db_table = 'tasks'
-    
-    def __str__(self):
-        return self.title
 
 class TaskLog(models.Model):
     task = models.ForeignKey(Task, on_delete=models.CASCADE)
@@ -154,26 +152,3 @@ class TaskLog(models.Model):
     class Meta:
         managed = False
         db_table = 'task_logs'
-    
-    def __str__(self):
-        return f"{self.task.title} - {self.action}"
-    
-class ProjectMember(models.Model):
-    ROLE_CHOICES = (
-        ('member', 'Участник'),
-        ('manager', 'Менеджер'),
-        ('admin', 'Администратор'),
-    )
-    
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='project_memberships')
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='members')
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='member')
-    joined_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        managed = False  # ДОБАВЬТЕ ЭТУ СТРОКУ!
-        db_table = 'project_members'
-        unique_together = ['user', 'project']
-    
-    def __str__(self):
-        return f"{self.user.username} - {self.project.title} ({self.role})"

@@ -27,3 +27,12 @@ Thumbs.db
 
 # Docker
 data/
+
+# Environment variables
+.env
+api/.env
+web/.env
+
+# Temporary files
+docker-compose
+list_tables.py

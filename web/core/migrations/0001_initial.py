@@ -21,9 +21,10 @@ class Migration(migrations.Migration):
                 ('first_name', models.CharField(blank=True, max_length=150, verbose_name='first name')),
                 ('last_name', models.CharField(blank=True, max_length=150, verbose_name='last name')),
                 ('username', models.CharField(max_length=50, unique=True)),
-                ('email', models.EmailField(max_length=254, unique=True)),
-                ('password_hash', models.CharField(max_length=255)),
+                ('email', models.EmailField(blank=True, max_length=254, null=True, unique=True)),
+                ('password', models.CharField(max_length=255)),
                 ('role', models.CharField(choices=[('guest', 'Гость'), ('user', 'Пользователь'), ('manager', 'Менеджер'), ('admin', 'Администратор')], default='guest', max_length=20)),
+                ('department', models.CharField(blank=True, max_length=50, null=True)),
                 ('is_active', models.BooleanField(default=True)),
                 ('is_staff', models.BooleanField(default=False)),
                 ('is_superuser', models.BooleanField(default=False)),
@@ -44,7 +45,9 @@ class Migration(migrations.Migration):
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('title', models.CharField(max_length=100)),
                 ('description', models.TextField(null=True)),
+                ('department', models.CharField(blank=True, max_length=50, null=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
+                ('owner', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),
             ],
             options={
                 'db_table': 'projects',
@@ -62,6 +65,8 @@ class Migration(migrations.Migration):
                 ('metadata', models.JSONField(null=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
+                ('assigned_to', models.ForeignKey(blank=True, db_column='assigned_to', null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='assigned_tasks', to=settings.AUTH_USER_MODEL)),
+                ('project', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='core.project')),
             ],
             options={
                 'db_table': 'tasks',
@@ -75,6 +80,8 @@ class Migration(migrations.Migration):
                 ('action', models.CharField(max_length=50)),
                 ('details', models.JSONField(blank=True, null=True)),
                 ('timestamp', models.DateTimeField(auto_now_add=True)),
+                ('task', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='core.task')),
+                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.CASCADE, to=settings.AUTH_USER_MODEL)),
             ],
             options={
                 'db_table': 'task_logs',
@@ -96,6 +103,7 @@ class Migration(migrations.Migration):
             ],
             options={
                 'db_table': 'role_upgrade_requests',
+                'managed': False,
                 'ordering': ['-created_at'],
             },
         ),
