@@ -10,9 +10,13 @@ __pycache__/
 *.pyo
 *.pyd
 
+# Node
+node_modules/
+
 # IDE
 .vscode/
 .idea/
+.claude/
 
 # OS
 .DS_Store
@@ -32,6 +36,7 @@ data/
 .env
 api/.env
 web/.env
+frontend/.env
 
 # Temporary files
 docker-compose
