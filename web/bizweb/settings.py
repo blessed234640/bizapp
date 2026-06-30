@@ -124,7 +124,7 @@ AUTH_USER_MODEL = 'core.User'
 
 # Права доступа для ролей
 ROLE_PERMISSIONS = {
-    'guest': [
+    'intern': [
         'core.view_own_profile',
     ],
     'user': [

@@ -15,14 +15,14 @@ class Department(models.Model):
 
 class User(AbstractUser):
     ROLE_CHOICES = (
-        ('guest', 'Гость'),
+        ('intern', 'Стажер'),
         ('user', 'Пользователь'),
         ('manager', 'Менеджер'),
         ('admin', 'Администратор'),
     )
-    
+
     email = models.EmailField(unique=True, null=True, blank=True)
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='guest')
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='intern')
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True)
     
     from .managers import CustomUserManager
@@ -120,27 +120,78 @@ class Task(models.Model):
         ('completed', 'Завершена'),
         ('cancelled', 'Отменена'),
     )
-    
+
     project = models.ForeignKey(Project, on_delete=models.CASCADE)
     title = models.CharField(max_length=100)
     description = models.TextField(null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     priority = models.IntegerField(default=0)
     assigned_to = models.ForeignKey(
-        User, 
-        on_delete=models.SET_NULL, 
-        null=True, 
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
         blank=True,
         related_name='assigned_tasks',
         db_column='assigned_to'
     )
     metadata = models.JSONField(null=True)
+    deadline = models.DateTimeField(null=True, blank=True)
+    is_critical = models.BooleanField(default=False)
+    ai_generated = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    ai_score = models.IntegerField(null=True, blank=True)
+    ai_feedback = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         managed = False
         db_table = 'tasks'
+
+
+class AIReport(models.Model):
+    manager = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='ai_reports'
+    )
+    project = models.ForeignKey(
+        Project,
+        on_delete=models.CASCADE,
+        related_name='ai_reports'
+    )
+    content = models.JSONField()
+    report_date = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed = False
+        db_table = 'ai_reports'
+        unique_together = ('manager', 'project', 'report_date')
+        ordering = ['-report_date']
+
+    def __str__(self):
+        return f"Отчёт {self.report_date} — {self.project} ({self.manager})"
+
+
+class EmployeeStats(models.Model):
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='stats'
+    )
+    total_completed = models.IntegerField(default=0)
+    completed_on_time = models.IntegerField(default=0)
+    completed_overdue = models.IntegerField(default=0)
+    avg_score = models.DecimalField(max_digits=4, decimal_places=2, default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = False
+        db_table = 'employee_stats'
+
+    def __str__(self):
+        return f"Статистика: {self.user.username} (avg: {self.avg_score})"
 
 class TaskLog(models.Model):
     task = models.ForeignKey(Task, on_delete=models.CASCADE)

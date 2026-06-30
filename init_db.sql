@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(50) UNIQUE NOT NULL,
     email VARCHAR(100) UNIQUE,
     password VARCHAR(255) NOT NULL,
-    role VARCHAR(20) DEFAULT 'guest' CHECK (role IN ('admin', 'manager', 'user', 'guest')),
+    role VARCHAR(20) DEFAULT 'intern' CHECK (role IN ('admin', 'manager', 'user', 'intern')),
     department_id INTEGER REFERENCES departments(id) ON DELETE SET NULL,
     first_name VARCHAR(150),
     last_name VARCHAR(150),
@@ -52,9 +52,15 @@ CREATE TABLE IF NOT EXISTS tasks (
     priority INTEGER DEFAULT 0,
     assigned_to INTEGER REFERENCES users(id) ON DELETE SET NULL,
     metadata JSONB,
+    deadline TIMESTAMP,
+    is_critical BOOLEAN DEFAULT FALSE,
+    ai_generated BOOLEAN DEFAULT FALSE,
+    completed_at TIMESTAMP,
+    ai_score INTEGER CHECK (ai_score BETWEEN 1 AND 10),
+    ai_feedback TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    tsv tsvector -- Для полнотекстового поиска
+    tsv tsvector
 );
 
 -- ЛОГИ ЗАДАЧ
@@ -79,6 +85,41 @@ CREATE TABLE IF NOT EXISTS role_upgrade_requests (
     reviewed_at TIMESTAMP,
     reviewed_by_id INTEGER REFERENCES users(id) ON DELETE SET NULL
 );
+
+-- AI ОТЧЁТЫ (ежевечерний срез для менеджера)
+CREATE TABLE IF NOT EXISTS ai_reports (
+    id SERIAL PRIMARY KEY,
+    manager_id INTEGER REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+    project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE NOT NULL,
+    content JSONB NOT NULL,
+    report_date DATE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (manager_id, project_id, report_date)
+);
+
+-- СТАТИСТИКА СОТРУДНИКОВ (накопительный профиль)
+CREATE TABLE IF NOT EXISTS employee_stats (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE UNIQUE NOT NULL,
+    total_completed INTEGER DEFAULT 0,
+    completed_on_time INTEGER DEFAULT 0,
+    completed_overdue INTEGER DEFAULT 0,
+    avg_score DECIMAL(4, 2) DEFAULT 0.00,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- УВЕДОМЛЕНИЯ
+CREATE TABLE IF NOT EXISTS notifications (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    text TEXT NOT NULL,
+    is_read BOOLEAN DEFAULT FALSE,
+    task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+    project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS notifications_user_idx ON notifications(user_id, is_read, created_at DESC);
 
 -- Индекс для полнотекстового поиска
 CREATE INDEX IF NOT EXISTS tasks_tsv_idx ON tasks USING GIN(tsv);

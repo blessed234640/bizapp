@@ -1,0 +1,101 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: #060918;
+    color: #F1F5F9;
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #0D1526;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #2D3F5E;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #6366F1;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-space-900 border border-space-600 rounded-2xl backdrop-blur-sm;
+    background: linear-gradient(135deg, rgba(13,21,38,0.9), rgba(17,24,39,0.8));
+  }
+
+  .glass-card-hover {
+    @apply glass-card transition-all duration-200 hover:border-space-500 hover:shadow-card;
+  }
+
+  .btn-primary {
+    @apply px-5 py-2.5 rounded-xl font-medium text-sm text-white transition-all duration-200;
+    background: linear-gradient(135deg, #6366F1, #8B5CF6);
+  }
+
+  .btn-primary:hover {
+    box-shadow: 0 0 20px #6366F150;
+    transform: translateY(-1px);
+  }
+
+  .btn-primary:active {
+    transform: translateY(0);
+  }
+
+  .btn-secondary {
+    @apply px-5 py-2.5 rounded-xl font-medium text-sm text-slate-300 bg-space-700 border border-space-500 transition-all duration-200 hover:border-brand-500 hover:text-white;
+  }
+
+  .btn-ghost {
+    @apply px-4 py-2 rounded-lg font-medium text-sm text-slate-400 transition-all duration-150 hover:bg-space-700 hover:text-white;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-3 rounded-xl bg-space-800 border border-space-600 text-slate-200 text-sm placeholder-slate-500 outline-none transition-all duration-200;
+  }
+
+  .input-field:focus {
+    @apply border-brand-500;
+    box-shadow: 0 0 0 3px #6366F120;
+  }
+
+  .badge-status {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+
+  .ai-glow {
+    position: relative;
+  }
+
+  .ai-glow::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(135deg, #6366F1, #8B5CF6);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+}

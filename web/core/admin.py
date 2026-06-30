@@ -16,7 +16,7 @@ class CustomUserAdmin(UserAdmin):
         ('Персональная информация', {'fields': ('email', 'first_name', 'last_name', 'department')}),
         ('Права доступа', {
             'fields': ('role', 'is_active', 'is_staff', 'is_superuser'),
-            'description': 'Роли: guest (просмотр), user (создание), manager (управление), admin (полный доступ).'
+            'description': 'Роли: intern (просмотр), user (создание), manager (управление), admin (полный доступ).'
         }),
         ('Важные даты', {'fields': ('last_login', 'date_joined')}),
     )

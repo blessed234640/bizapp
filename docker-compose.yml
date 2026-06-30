@@ -56,6 +56,52 @@ services:
       - ./.env:/app/.env
     command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8080"
 
+  # Vue.js фронтенд
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    networks:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8001
+    depends_on:
+      - api
+
+  # Celery worker — выполняет фоновые задачи
+  celery-worker:
+    build: ./api
+    depends_on:
+      - db
+      - redis
+    env_file:
+      - .env
+    networks:
+      - backend
+    volumes:
+      - ./api:/app
+      - ./.env:/app/.env
+    command: celery -A celery_app worker --loglevel=info --concurrency=2
+
+  # Celery beat — планировщик (каждые 2ч + 18:00)
+  celery-beat:
+    build: ./api
+    depends_on:
+      - db
+      - redis
+      - celery-worker
+    env_file:
+      - .env
+    networks:
+      - backend
+    volumes:
+      - ./api:/app
+      - ./.env:/app/.env
+    command: celery -A celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+
   # pgAdmin для графического управления БД
   pgadmin:
     image: dpage/pgadmin4:latest
